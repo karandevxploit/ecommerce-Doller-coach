@@ -87,12 +87,3 @@ const BRAND_COLOR = "#000000";
 const SECONDARY_COLOR = "#999999";
 
 exports.sendEmail = sendEmailCore;
-
-exports.sendOrderToAdmin = async (order) => {
-  const adminEmail = process.env.ADMIN_EMAIL || "karanyadav.hack.dev@gmail.com";
-  return sendEmailCore({ 
-    to: adminEmail, 
-    subject: "🛒 New Order Received", 
-    html: `<h1>New Order Received</h1><p>Order ID: ${order._id}</p>` 
-  });
-};

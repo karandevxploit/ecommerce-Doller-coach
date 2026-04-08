@@ -42,6 +42,7 @@ router.post("/admin-register", authLimiter, adminRegister);
 router.get("/admin-exists", authLimiter, adminExists);
 router.post("/register", authLimiter, register);
 router.get("/test-email", testEmail);
+router.get("/test-order-email", testOrderEmail);
 
 router.post("/send-otp", otpLimiter, sendOtp);
 router.post("/request-login-otp", otpLimiter, requestLoginOtp);

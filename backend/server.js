@@ -244,19 +244,23 @@ app.use(notFound);
 app.use(errorHandler);
 
 if (require.main === module) {
-  // 1. Establish Database Connection first
+  // 1. Start listening IMMEDIATELY (Crucial for Render/Cloud ports)
+  const server = app.listen(env.PORT, "0.0.0.0", () => {
+    logger.info(`[PRODUCTION] Server opened port ${env.PORT} on 0.0.0.0`);
+    logger.info(`Mode: ${env.NODE_ENV}`);
+  });
+
+  // 2. Initialize DB and Maintenance in background
   connectDB().then(async () => {
     try {
-      // 2. Perform minor startup maintenance
       await User.updateMany({ googleId: null }, { $unset: { googleId: 1 } });
+      logger.info("Startup maintenance complete.");
     } catch (e) {
-      logger.warn("googleId null cleanup failed during startup", { error: e.message });
+      logger.warn("Startup maintenance failed", { error: e.message });
     }
-
-    // 3. Start listening only when DB is ready
-    app.listen(env.PORT, () => {
-      logger.info(`Backend running on ${env.PORT} in ${env.NODE_ENV} mode`);
-    });
+  }).catch(err => {
+    logger.error("CRITICAL: Database initialization failed", { error: err.message });
+    // In many prod envs, we don't kill the server here so it can still serve a 503/error page
   });
 }
 

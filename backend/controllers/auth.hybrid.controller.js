@@ -367,3 +367,37 @@ exports.testEmail = asyncHandler(async (req, res) => {
     return fail(res, `Email failed: ${err.message}`, 500);
   }
 });
+
+exports.testOrderEmail = asyncHandler(async (req, res) => {
+  const to = String(req.query.email || "").trim();
+  if (!to) return fail(res, "Recipient email (?email=) is required", 400);
+
+  const emailService = require("../services/email.service");
+  
+  // Create a high-fidelity mock order
+  const mockOrder = {
+    _id: "661414141414141414141414",
+    totalAmount: 14500,
+    createdAt: new Date(),
+    products: [
+      { title: "Elite Chrono S1", quantity: 1, price: 9500 },
+      { title: "Matte Carbon Straps", quantity: 1, price: 5000 }
+    ],
+    address: { name: "Elite Customer", phone: "9999999999" }
+  };
+
+  const mockCustomer = {
+    name: "Elite Customer",
+    email: to
+  };
+
+  logger.info(`[Diagnostic] Triggering MOCK Order Email to: ${to}`);
+
+  try {
+    await emailService.sendOrderPlacedEmails({ order: mockOrder, customer: mockCustomer });
+    return ok(res, { orderId: mockOrder._id }, `Success! Mock order email sent to ${to}. Check logs for MessageID.`);
+  } catch (err) {
+    logger.error(`[Diagnostic Failed] ${err.message}`);
+    return fail(res, `Mock Order Email failed: ${err.message}`, 500);
+  }
+});

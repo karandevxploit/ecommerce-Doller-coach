@@ -3,7 +3,7 @@ const orderStackService = require("../services/order.service");
 const Order = require("../models/order.model");
 const { buildPdfBuffer } = require("../services/invoice.service");
 const { ok, fail } = require("../utils/apiResponse");
-const { sendOrderToAdmin, sendOrderStatusToUser } = require("../utils/sendEmail");
+const emailService = require("../services/email.service"); // Switched to high-fidelity EmailService
 const asyncHandler = require("express-async-handler");
 const logger = require("../utils/logger");
 const paginate = require("../utils/pagination");
@@ -38,9 +38,11 @@ exports.createOrder = asyncHandler(async (req, res) => {
     };
 
     const createdOrder = await orderStackService.createOrder(req.user._id, orderData);
-
-    // 3. Trigger Async Tasks (Non-blocking)
-    sendOrderToAdmin(createdOrder).catch(err => logger.error("Admin Order Email Failed:", err));
+    
+    // 3. Trigger Async Professional Email (Confirmation to User + Admin)
+    logger.info(`[TRACE] Triggering Order Confirmation Emails for #${createdOrder._id}`);
+    emailService.sendOrderPlacedEmails({ order: createdOrder, customer: req.user })
+      .catch(err => logger.error(`[TRACE ERROR] sendOrderPlacedEmails FAILED: ${err.message}`));
 
     return ok(res, createdOrder, "Order placed successfully", 201);
   } catch (error) {
@@ -91,9 +93,18 @@ exports.updateOrderStatus = asyncHandler(async (req, res) => {
 
   if (!order) return fail(res, "Order not found", 404);
 
-  sendOrderStatusToUser(order).catch(err => logger.error("User Status Email Failed:", err));
+  // Security & Deliverability: Populate user to get email for notification
+  const customer = await require("../models/user.model").findById(order.userId).lean();
+  
+  if (customer) {
+    logger.info(`[TRACE] Triggering Status Update Email [${status}] for #${order._id} to ${customer.email}`);
+    emailService.sendOrderStatusEmail({ order, customer })
+      .catch(err => logger.error(`[TRACE ERROR] sendOrderStatusEmail FAILED: ${err.message}`));
+  } else {
+    logger.warn(`[TRACE] Skipping Status Email: Customer not found for order ${order._id}`);
+  }
 
-  return ok(res, order, "Order status updated");
+  return ok(res, order, `Order status updated to ${status}`);
 });
 
 exports.updatePaymentStatus = asyncHandler(async (req, res) => {
