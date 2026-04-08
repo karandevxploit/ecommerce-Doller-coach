@@ -1,0 +1,208 @@
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\App.jsx
+  57:49  error  'err' is not defined  no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\admin\AdminLayout.jsx
+  5:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\admin\AdminRoute.jsx
+  54:86   error  React Hook "useMemo" is called conditionally. React Hooks must be called in the exact same order in every component render. Did you accidentally call a React Hook after an early return?                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    react-hooks/rules-of-hooks
+  54:100  error  Error: Cannot call impure function during render
+
+`Math.random` is an impure function. Calling an impure function can produce unstable results that update unpredictably when the component happens to re-render. (https://react.dev/reference/rules/components-and-hooks-must-be-pure#components-and-hooks-must-be-idempotent).
+
+  52 |              </div>
+  53 |              <div className="flex items-center gap-2 text-[9px] font-black text-gray-300 uppercase tracking-widest">
+> 54 |                 <div className="h-1.5 w-1.5 rounded-full bg-[#0f172a]" /> Trace ID: {useMemo(() => Math.random().toString(36).slice(2, 10).toUpperCase(), [])}
+     |                                                                                                    ^^^^^^^^^^^^^ Cannot call impure function
+  55 |              </div>
+  56 |           </div>
+  57 |         </div>  react-hooks/purity
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\admin\pages\Offers.jsx
+  130:19  error  'err' is not defined  no-undef
+  171:19  error  'err' is not defined  no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\admin\pages\Orders.jsx
+   23:44  error  'err' is not defined  no-undef
+   23:66  error  'err' is not defined  no-undef
+   52:45  error  'err' is not defined  no-undef
+   52:67  error  'err' is not defined  no-undef
+   66:36  error  'err' is not defined  no-undef
+   95:11  error  'err' is not defined  no-undef
+   97:30  error  'err' is not defined  no-undef
+  103:18  error  'err' is not defined  no-undef
+  104:19  error  'err' is not defined  no-undef
+  107:48  error  'err' is not defined  no-undef
+  133:52  error  'err' is not defined  no-undef
+  134:19  error  'err' is not defined  no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\admin\pages\Products.jsx
+  213:19  error  'err' is not defined  no-undef
+  229:19  error  'err' is not defined  no-undef
+  275:19  error  'err' is not defined  no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\admin\pages\Reviews.jsx
+  22:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\components\AddressManager.jsx
+    1:38  error    'useMemo' is defined but never used. Allowed unused vars must match /^[A-Z_]/u                                     no-unused-vars
+   45:6   warning  React Hook useEffect has a missing dependency: 'fetchAddresses'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+  159:19  error    'err' is not defined                                                                                               no-undef
+  198:17  error    Empty block statement                                                                                              no-empty
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\components\FloatingVideo.jsx
+  4:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\components\ProductCard.jsx
+   1:26  error  'useRef' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+   6:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+  63:31  error  'setIsHovered' is not defined                                                  no-undef
+  64:31  error  'setIsHovered' is not defined                                                  no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\components\QuickSizeSelector.jsx
+  3:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\components\layout\BottomNav.jsx
+  7:35  error  'snappyTransition' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\components\layout\Footer.jsx
+  18:5  error  'toast' is not defined  no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\components\layout\Layout.jsx
+  8:27  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\components\layout\Navbar.jsx
+  17:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\components\ui\CouponBox.jsx
+  3:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\components\ui\GlobalLoader.jsx
+  1:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\components\ui\Skeleton.jsx
+  1:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\components\ui\WhatsAppButton.jsx
+  3:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\hooks\useAutoLogout.js
+  47:6  warning  React Hook useEffect has a missing dependency: 'resetTimer'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\Cart.jsx
+  17:10  error    'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u                                                             no-unused-vars
+  44:6   warning  React Hook useEffect has a missing dependency: 'items'. Either include it or remove the dependency array                                  react-hooks/exhaustive-deps
+  44:7   warning  React Hook useEffect has a complex expression in the dependency array. Extract it to a separate variable so it can be statically checked  react-hooks/exhaustive-deps
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\Checkout.jsx
+   14:10  error  'formatPrice' is defined but never used. Allowed unused vars must match /^[A-Z_]/u         no-unused-vars
+   27:28  error  'fetchUser' is assigned a value but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+   37:19  error  'errors' is assigned a value but never used. Allowed unused vars must match /^[A-Z_]/u     no-unused-vars
+   54:50  error  'err' is not defined                                                                       no-undef
+   90:19  error  'err' is not defined                                                                       no-undef
+   90:50  error  'err' is not defined                                                                       no-undef
+  143:20  error  'err' is not defined                                                                       no-undef
+  213:40  error  'err' is not defined                                                                       no-undef
+  213:62  error  'err' is not defined                                                                       no-undef
+  214:19  error  'err' is not defined                                                                       no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\Collection.jsx
+   8:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u            no-unused-vars
+   9:37  error  'modalTransition' is defined but never used. Allowed unused vars must match /^[A-Z_]/u   no-unused-vars
+   9:54  error  'springTransition' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+   9:72  error  'scaleIn' is defined but never used. Allowed unused vars must match /^[A-Z_]/u           no-unused-vars
+  61:49  error  'err' is not defined                                                                     no-undef
+  93:41  error  'err' is not defined                                                                     no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\ForgotPassword.jsx
+  21:19  error  'err' is not defined  no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\Home.jsx
+   7:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+  47:33  error  'setTick' is not defined                                                       no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\Login.jsx
+    6:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+   30:19  error  'err' is not defined                                                           no-undef
+  183:35  error  'err' is not defined                                                           no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\MyOrders.jsx
+   5:8   error  'toast' is defined but never used. Allowed unused vars must match /^[A-Z_]/u                   no-unused-vars
+  49:45  error  'err' is not defined                                                                           no-undef
+  62:9   error  'containerVars' is assigned a value but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+  70:9   error  'itemVars' is assigned a value but never used. Allowed unused vars must match /^[A-Z_]/u       no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\OrderSuccess.jsx
+    8:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+  168:45  error  'err' is not defined                                                           no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\ProductPage.jsx
+    7:10  error    'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u                                   no-unused-vars
+   75:9   error    'setCanReview' is not defined                                                                                   no-undef
+   77:9   error    'setCanReview' is not defined                                                                                   no-undef
+  100:6   warning  React Hook useEffect has a missing dependency: 'loadReviews'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+  112:13  error    'err' is not defined                                                                                            no-undef
+  167:19  error    'err' is not defined                                                                                            no-undef
+  179:19  error    'err' is not defined                                                                                            no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\Profile.jsx
+    7:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u   no-unused-vars
+    8:37  error  'fadeIn' is defined but never used. Allowed unused vars must match /^[A-Z_]/u   no-unused-vars
+    8:45  error  'scaleIn' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+   98:46  error  'err' is not defined                                                            no-undef
+  117:19  error  'err' is not defined                                                            no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\Register.jsx
+   4:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+  43:19  error  'err' is not defined                                                           no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\ResetPassword.jsx
+  10:17  error  'setEmail' is assigned a value but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+  29:19  error  'err' is not defined                                                                      no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\Search.jsx
+  8:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\VerifyOtp.jsx
+  6:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\VerifyResetOtp.jsx
+  30:19  error  'err' is not defined  no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\Wishlist.jsx
+  4:21  error  'useState' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+  7:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u    no-unused-vars
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\admin\AdminLogin.jsx
+   6:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u                no-unused-vars
+  34:9   error  'formatError' is assigned a value but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+  66:11  error  'err' is not defined                                                                         no-undef
+  71:37  error  'err' is not defined                                                                         no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\pages\admin\AdminRegister.jsx
+   6:10  error  'motion' is defined but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+  87:19  error  'err' is not defined                                                           no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\store\configStore.js
+  14:53  error  'err' is not defined  no-undef
+  26:48  error  'err' is not defined  no-undef
+  27:13  error  'err' is not defined  no-undef
+  41:46  error  'err' is not defined  no-undef
+  42:13  error  'err' is not defined  no-undef
+
+C:\Users\AMC\OneDrive\Desktop\Doller coa\frontend\src\store\index.js
+   47:46  error  'err' is not defined  no-undef
+   48:17  error  'err' is not defined  no-undef
+  122:54  error  'err' is not defined  no-undef
+  133:23  error  'err' is not defined  no-undef
+  134:17  error  'err' is not defined  no-undef
+  187:19  error  'err' is not defined  no-undef
+  188:13  error  'err' is not defined  no-undef
+  197:19  error  'err' is not defined  no-undef
+  198:13  error  'err' is not defined  no-undef
+  207:19  error  'err' is not defined  no-undef
+  208:13  error  'err' is not defined  no-undef
+
+✖ 115 problems (110 errors, 5 warnings)
+

@@ -1,0 +1,243 @@
+const path = require("path");
+const dotenv = require("dotenv");
+dotenv.config({ path: path.join(__dirname, ".env") });
+
+const express = require("express");
+const mongoose = require("mongoose");
+const cors = require("cors");
+const helmet = require("helmet");
+const morgan = require("morgan");
+const rateLimit = require("express-rate-limit");
+const compression = require("compression");
+
+console.log("--- SYSTEM STARTUP ---");
+console.log("PORT:", process.env.PORT || 7000);
+console.log("ADMIN_SECRET loaded:", Boolean(process.env.ADMIN_SECRET));
+console.log("----------------------");
+
+process.on("uncaughtException", (err) => {
+  console.error("CRITICAL: Uncaught Exception! Shutting down...");
+  console.error(err.name, err.message, err.stack);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (err) => {
+  console.error("CRITICAL: Unhandled Rejection! Shutting down...");
+  console.error(err);
+  process.exit(1);
+});
+
+const mongoSanitize = require("express-mongo-sanitize");
+const logger = require("./utils/logger");
+const env = require("./config/env");
+
+const authRoutes = require("./routes/auth.routes");
+const productRoutes = require("./routes/product.routes");
+const reviewRoutes = require("./routes/review.routes");
+const cartRoutes = require("./routes/cart.routes");
+const orderRoutes = require("./routes/order.routes");
+const paymentRoutes = require("./routes/payment.routes");
+const offerRoutes = require("./routes/offer.routes");
+const notificationRoutes = require("./routes/notification.routes");
+const adminRoutes = require("./routes/admin.routes");
+const wishlistRoutes = require("./routes/wishlist.routes");
+const uploadRoutes = require("./routes/upload.routes");
+const couponRoutes = require("./routes/coupon.routes");
+const { errorHandler, notFound } = require("./middlewares/error.middleware");
+
+const passport = require("passport");
+const GoogleStrategy = require("passport-google-oauth20").Strategy;
+const session = require("express-session");
+const MongoStore = require("connect-mongo");
+const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
+const User = require("./models/user.model");
+
+const app = express();
+
+app.use(compression());
+app.use(helmet({
+  contentSecurityPolicy: env.NODE_ENV === "production" ? undefined : false,
+}));
+app.use(mongoSanitize());
+
+const allowedOrigins = (env.CLIENT_URL || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps or curl requests) in dev
+      if (!origin && env.NODE_ENV === "development") return callback(null, true);
+      // In production, enforce strictly. If origin exists and matches, allow it.
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      if (env.NODE_ENV === "development") {
+        return callback(null, true);
+      }
+      logger.warn(`Blocked CORS request from origin: ${origin}`);
+      return callback(new Error("Not allowed by CORS"), false);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+app.use(express.json({ 
+  limit: "10mb",
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
+
+if (env.NODE_ENV === "development") {
+  app.use(morgan("dev"));
+} else {
+  app.use(morgan("combined", { stream: { write: (message) => logger.info(message.trim()) } }));
+}
+
+app.use(rateLimit({ 
+  windowMs: 15 * 60 * 1000, 
+  limit: env.NODE_ENV === "production" ? 100 : 1000, // Strict production limit, loose dev limit
+  message: "Too many requests from this IP, please try again after 15 minutes",
+  standardHeaders: true,
+  legacyHeaders: false,
+}));
+
+// Sessions required for OAuth handshake
+app.set("trust proxy", 1);
+app.use(
+  session({
+    secret: env.JWT_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    proxy: true,
+    cookie: {
+      httpOnly: true,
+      sameSite: env.NODE_ENV === "production" ? "none" : "lax",
+      secure: env.NODE_ENV === "production",
+      maxAge: 14 * 24 * 60 * 60 * 1000,
+    },
+    store: MongoStore.create({
+      mongoUrl: env.MONGO_URI,
+      ttl: 14 * 24 * 60 * 60,
+    }),
+  })
+);
+
+// Passport OAuth setup
+app.use(passport.initialize());
+app.use(passport.session());
+
+if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET || !process.env.GOOGLE_CALLBACK_URL) {
+  logger.warn("Google OAuth is not fully configured.");
+} else {
+  passport.use(
+    new GoogleStrategy(
+      {
+        clientID: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        callbackURL: process.env.GOOGLE_CALLBACK_URL,
+      },
+      async (_accessToken, _refreshToken, profile, done) => {
+        try {
+          const googleId = profile.id;
+          const email = profile.emails && profile.emails.length ? profile.emails[0].value : null;
+          const name = profile.displayName || "Google User";
+
+          let user = await User.findOne({ googleId });
+          if (!user && email) {
+            user = await User.findOne({ email });
+          }
+
+          if (!user) {
+            const passwordHash = await bcrypt.hash(crypto.randomBytes(16).toString("hex"), 12); // Rounds 12
+            user = await User.create({
+              name,
+              email: email || `user_${googleId}@example.com`,
+              phone: null,
+              password: passwordHash,
+              role: "user",
+              googleId,
+              provider: "email",
+              emailVerified: true,
+              phoneVerified: false,
+              isVerified: true,
+            });
+          } else {
+            user.googleId = googleId;
+            if (email) user.email = email;
+            user.name = name || user.name;
+            user.emailVerified = true;
+            user.isVerified = true;
+            await user.save();
+          }
+
+          return done(null, user);
+        } catch (err) {
+          return done(err);
+        }
+      }
+    )
+  );
+
+  passport.serializeUser((user, done) => done(null, user._id.toString()));
+  passport.deserializeUser(async (id, done) => {
+    try {
+      const user = await User.findById(id).lean();
+      done(null, user);
+    } catch (e) {
+      done(e);
+    }
+  });
+}
+
+app.get("/health", (_req, res) => res.json({ ok: true, environment: env.NODE_ENV }));
+app.use("/api/auth", authRoutes);
+app.use("/api/products", productRoutes);
+app.use("/api/reviews", reviewRoutes);
+app.use("/api/cart", cartRoutes);
+app.use("/api/orders", orderRoutes);
+app.use("/api/payment", paymentRoutes);
+app.use("/api/offers", offerRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/wishlist", wishlistRoutes);
+app.use("/api/upload", uploadRoutes);
+app.use("/api/coupons", couponRoutes);
+
+const configController = require("./controllers/config.controller");
+app.get("/api/config", configController.getConfig);
+
+app.use(notFound);
+app.use(errorHandler);
+
+if (require.main === module) {
+  mongoose
+    .connect(env.MONGO_URI)
+    .then(async () => {
+      logger.info("MongoDB Connected");
+      try {
+        await User.updateMany({ googleId: null }, { $unset: { googleId: 1 } });
+      } catch (e) {
+        logger.warn("googleId null cleanup failed", { error: e.message });
+      }
+      app.listen(env.PORT, () => {
+        logger.info(`Backend running on ${env.PORT} in ${env.NODE_ENV} mode`);
+      });
+    })
+    .catch((err) => {
+      logger.error("DB connection failed", { error: err.message });
+      process.exit(1);
+    });
+}
+
+module.exports = app;
+
+
+

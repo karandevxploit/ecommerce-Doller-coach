@@ -1,0 +1,78 @@
+@import "leaflet/dist/leaflet.css";
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #0f172a;
+  --color-accent: #1e3a8a;
+  --color-brand-blue: #1e40af;
+  --color-brand-dark: #020617;
+  --color-background: #ffffff;
+  --color-slate-50: #f8fafc;
+  --color-slate-100: #f1f5f9;
+  --color-slate-200: #e2e8f0;
+  --color-slate-400: #94a3b8;
+  --color-slate-900: #0f172a;
+
+  --shadow-premium: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-luxury: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+  --shadow-glass: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+}
+
+@layer base {
+  html {
+    @apply antialiased scroll-smooth;
+    font-family: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif;
+  }
+  
+  body {
+    @apply bg-white text-slate-900 selection:bg-slate-900 selection:text-white;
+  }
+}
+
+@layer components {
+  .premium-card {
+    @apply bg-white border border-slate-100 rounded-3xl p-6 transition-all duration-300 hover:shadow-luxury hover:-translate-y-1;
+  }
+
+  .glass-card {
+    @apply bg-white/70 backdrop-blur-xl border border-white/20 shadow-glass rounded-3xl p-6;
+  }
+
+  .btn-premium {
+    @apply px-8 py-4 bg-slate-900 text-white font-black uppercase tracking-[0.2em] text-[10px] rounded-2xl transition-all duration-300 hover:bg-black hover:shadow-luxury active:scale-95 disabled:opacity-50 flex items-center justify-center gap-3 decoration-0;
+  }
+
+  .btn-outline {
+    @apply px-8 py-4 bg-white border border-slate-200 text-slate-900 font-black uppercase tracking-[0.2em] text-[10px] rounded-2xl transition-all duration-300 hover:border-slate-900 hover:shadow-premium active:scale-95 flex items-center justify-center gap-3 decoration-0;
+  }
+
+  .input-premium {
+    @apply w-full px-5 py-4 bg-slate-50 border border-transparent rounded-2xl text-xs font-bold text-slate-900 outline-none transition-all focus:bg-white focus:border-slate-900 focus:ring-4 focus:ring-slate-100 placeholder:text-slate-300;
+  }
+
+  .text-manifest {
+    @apply text-slate-900 font-black uppercase tracking-tighter;
+  }
+
+  .text-meta {
+    @apply text-[9px] font-black text-slate-400 uppercase tracking-[0.3em];
+  }
+
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+  .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+  .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+  .custom-scrollbar::-webkit-scrollbar-thumb { @apply bg-slate-200 rounded-full hover:bg-slate-300 transition-colors; }
+}
+
+@keyframes shimmer {
+  0% { background-position: -1000px 0; }
+  100% { background-position: 1000px 0; }
+}
+
+.animate-shimmer {
+  background: linear-gradient(to right, #f1f5f9 8%, #e2e8f0 18%, #f1f5f9 33%);
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite linear;
+}
