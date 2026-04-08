@@ -1,6 +1,7 @@
 const productRepository = require("../repositories/product.repository");
 const orderRepository = require("../repositories/order.repository");
 const Coupon = require("../models/coupon.model");
+const Offer = require("../models/offer.model");
 const logger = require("../utils/logger");
 
 class OrderService {
@@ -32,54 +33,67 @@ class OrderService {
     }
 
     let discountAmount = 0;
-    let appliedCoupon = null;
+    let appliedDiscount = null;
+    let discountSource = null; // "coupon" or "offer"
 
     if (couponCode) {
       const code = couponCode.toUpperCase().trim();
       
-      const coupon = await Coupon.findOne({
+      // 1. Sequential Lookup: First check Coupons, then check Offers
+      let discountData = await Coupon.findOne({
         code: { $regex: `^${code}$`, $options: "i" }
       });
-      
-      console.log("Coupon Input:", couponCode);
-      console.log("Coupon Found:", coupon);
 
-      if (!coupon || !coupon.isActive) {
+      if (discountData) {
+        discountSource = "coupon";
+      } else {
+        discountData = await Offer.findOne({
+          couponCode: { $regex: `^${code}$`, $options: "i" },
+          isActive: true
+        });
+        if (discountData) discountSource = "offer";
+      }
+
+      if (!discountData || !discountData.isActive) {
         throw new Error("Invalid or inactive coupon");
       }
       
       const now = new Date();
+      const startDate = discountData.startDate || null;
+      const endDate = discountData.endDate || discountData.expiryDate || null;
 
-      if (coupon.startDate && now < coupon.startDate) {
-        throw new Error("Coupon not started");
+      if (startDate && now < new Date(startDate)) {
+        throw new Error("Coupon not yet active");
       }
 
-      const effectiveEndDate = coupon.endDate || coupon.expiryDate;
-      if (effectiveEndDate && now > new Date(effectiveEndDate)) {
+      if (endDate && now > new Date(endDate)) {
         throw new Error("Coupon expired");
       }
       
-      const limit = coupon.usageLimit || coupon.limit; // handle any potential field naming differences
-      if (limit !== null && coupon.usedCount >= limit) {
-        throw new Error("Coupon limit reached");
+      const limit = discountData.usageLimit || 0;
+      if (limit > 0 && discountData.usedCount >= limit) {
+        throw new Error("Coupon usage limit reached");
       }
       
-      if (subtotal < coupon.minOrderValue) {
-        throw new Error(`Minimum order value of ${coupon.minOrderValue} not met for this coupon`);
+      // Standardized Property: Use minOrderAmount (fallback to minOrderValue for legacy)
+      const minAmount = discountData.minOrderAmount ?? discountData.minOrderValue ?? 0;
+      if (subtotal < minAmount) {
+        throw new Error(`Minimum order of \u20B9${minAmount} required for this discount`);
       }
 
-      if (coupon.discountType === "percentage") {
-        discountAmount = (subtotal * coupon.discountValue) / 100;
-        if (coupon.maxDiscount !== null) {
-          discountAmount = Math.min(discountAmount, coupon.maxDiscount);
+      if (discountData.discountType === "percentage") {
+        discountAmount = (subtotal * discountData.discountValue) / 100;
+        const maxDisc = discountData.maxDiscount ?? null;
+        if (maxDisc !== null) {
+          discountAmount = Math.min(discountAmount, maxDisc);
         }
       } else {
-        discountAmount = coupon.discountValue;
+        // Handle "flat" type in Offers vs "fixed" in Coupons
+        discountAmount = discountData.discountValue;
       }
 
-      // Ensure discount doesn't exceed subtotal
       discountAmount = Math.min(discountAmount, subtotal);
-      appliedCoupon = coupon;
+      appliedDiscount = discountData;
     }
 
     const totalAmount = subtotal - discountAmount;
@@ -89,7 +103,11 @@ class OrderService {
       subtotalAmount: subtotal,
       discountAmount,
       totalAmount,
-      coupon: appliedCoupon ? { code: appliedCoupon.code, id: appliedCoupon._id } : null,
+      coupon: appliedDiscount ? { 
+        code: appliedDiscount.code || appliedDiscount.couponCode, 
+        id: appliedDiscount._id,
+        source: discountSource 
+      } : null,
     };
   }
 
@@ -151,12 +169,23 @@ class OrderService {
   async finalizeCouponUsage(couponCode) {
     if (!couponCode) return;
     try {
-      await Coupon.updateOne(
-        { code: couponCode.toUpperCase() },
+      const code = couponCode.toUpperCase().trim();
+      
+      // Try to update Coupon first
+      const couponUpdate = await Coupon.updateOne(
+        { code },
         { $inc: { usedCount: 1 } }
       );
+
+      // If not a coupon, try to update Offer
+      if (couponUpdate.matchedCount === 0) {
+        await Offer.updateOne(
+          { couponCode: code },
+          { $inc: { usedCount: 1 } }
+        );
+      }
     } catch (err) {
-      logger.error(`Failed to increment coupon ${couponCode}: ${err.message}`);
+      logger.error(`Failed to increment usage for ${couponCode}: ${err.message}`);
     }
   }
 }

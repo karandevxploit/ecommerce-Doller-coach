@@ -153,15 +153,17 @@ exports.adminLogin = asyncHandler(async (req, res) => {
 
   const user = await User.findOne({ email: String(email).toLowerCase().trim() }).select("+password");
   if (!user || user.role !== "admin") {
-    logger.warn(`Unauthorized admin login attempt: ${email}`);
+    logger.warn(`Unauthorized admin login attempt: ${email} (User found: ${Boolean(user)})`);
     return fail(res, "Access denied", 403);
   }
 
-  if (!(await bcrypt.compare(password, user.password || ""))) {
+  const isMatch = await bcrypt.compare(String(password), user.password || "");
+  if (!isMatch) {
+    logger.warn(`Admin password mismatch for: ${email}`);
     return fail(res, "Invalid email or password", 401);
   }
 
-  logger.info(`Admin logged in: ${user.email}`);
+  logger.info(`Admin logged in successfully: ${user.email}`);
   return sendTokens(res, user, "Admin login successful");
 });
 

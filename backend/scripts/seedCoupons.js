@@ -15,7 +15,7 @@ const seedCoupons = async () => {
         code: "WELCOME10",
         discountType: "percentage",
         discountValue: 10,
-        minOrderValue: 500,
+        minOrderAmount: 500,
         expiryDate: new Date("2026-12-31"),
         usageLimit: 100,
         isActive: true
@@ -24,7 +24,7 @@ const seedCoupons = async () => {
         code: "FLAT100",
         discountType: "fixed",
         discountValue: 100,
-        minOrderValue: 1000,
+        minOrderAmount: 1000,
         expiryDate: new Date("2025-12-31"),
         usageLimit: 50,
         isActive: true
@@ -33,7 +33,7 @@ const seedCoupons = async () => {
         code: "EXPIRED",
         discountType: "percentage",
         discountValue: 20,
-        minOrderValue: 0,
+        minOrderAmount: 0,
         expiryDate: new Date("2020-01-01"),
         usageLimit: 10,
         isActive: true

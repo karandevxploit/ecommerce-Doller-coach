@@ -9,8 +9,8 @@ dotenv.config({ path: path.join(__dirname, "..", ".env") });
 async function run() {
   await mongoose.connect(process.env.MONGO_URI);
   const email = "karanyadav.hack.dev@gmail.com";
-  const passwordText = "Karan@7409";
-  const hashedPassword = await bcrypt.hash(passwordText, 10);
+  const passwordText = "Karan@1234";
+  const hashedPassword = await bcrypt.hash(passwordText, 12);
   
   const adminData = {
     name: "Karan Yadav",

@@ -43,6 +43,7 @@ const adminRoutes = require("./routes/admin.routes");
 const wishlistRoutes = require("./routes/wishlist.routes");
 const uploadRoutes = require("./routes/upload.routes");
 const couponRoutes = require("./routes/coupon.routes");
+const configController = require("./controllers/config.controller");
 const { errorHandler, notFound } = require("./middlewares/error.middleware");
 
 const passport = require("passport");
