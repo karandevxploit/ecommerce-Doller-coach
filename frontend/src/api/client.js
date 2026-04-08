@@ -2,7 +2,10 @@ import axios from "axios";
 import toast from "react-hot-toast";
 import { translateError } from "../utils/userFriendlyErrors";
 
-const baseURL = import.meta.env.VITE_API_URL || (import.meta.env.MODE === "development" ? "http://localhost:7000/api" : "");
+const apiURL = import.meta.env.VITE_API_URL || (import.meta.env.MODE === "development" ? "http://localhost:7000/api" : "");
+// Defensive: strip trailing slash to prevent double-slashes in requests
+const baseURL = apiURL.endsWith("/") ? apiURL.slice(0, -1) : apiURL;
+
 if (!baseURL && import.meta.env.MODE === "production") {
   console.error("[CRITICAL] VITE_API_URL is missing in production environment!");
 }

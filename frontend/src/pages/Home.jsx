@@ -16,6 +16,7 @@ export default function Home() {
   const [offers, setOffers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [active, setActive] = useState(0);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     const load = async () => {

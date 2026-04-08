@@ -86,7 +86,7 @@ app.use(
       }
       
       logger.warn(`Blocked CORS request from origin: ${origin}`);
-      return callback(new Error("Not allowed by CORS"), false);
+      return callback(null, false);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
