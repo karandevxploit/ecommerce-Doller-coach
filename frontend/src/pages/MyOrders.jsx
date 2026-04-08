@@ -45,7 +45,7 @@ export default function MyOrders() {
         const res = await api.get("/orders/my");
         const list = res.data || [];
         setOrders(Array.isArray(list) ? list.map(mapOrder) : []);
-      } catch {
+      } catch (err) {
         console.error("Orders Sync Error:", err);
       } finally {
         setLoading(false);

@@ -73,7 +73,7 @@ export default function Products() {
         totalPages: data.meta?.totalPages || 1
       });
       setCurrentPage(page);
-    } catch {
+    } catch (err) {
       toast.error("Error loading: Catalog Access");
     } finally {
       setLoading(false);
@@ -94,7 +94,7 @@ export default function Products() {
       await api.delete(`/admin/products/${id}`);
       toast.success("Product Deleted");
       fetchProducts(currentPage);
-    } catch {
+    } catch (err) {
       toast.error("Erasure Order Failure");
     }
   };
@@ -209,7 +209,7 @@ export default function Products() {
       updateField("images", [...formData.images, ...urls]);
       setSelectedFiles([]);
       toast.success("Images uploaded");
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "Save Order Failure");
     } finally {
       setUploading(false);
@@ -225,7 +225,7 @@ export default function Products() {
       setVideoFile(null);
       setVideoPreview(null);
       toast.success("Video uploaded");
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "Video upload failed");
     } finally {
       setVideoUploading(false);
@@ -271,7 +271,7 @@ export default function Products() {
       }
       setFormOpen(false);
       fetchProducts();
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "Transmission Failure");
     } finally {
       setSaving(false);

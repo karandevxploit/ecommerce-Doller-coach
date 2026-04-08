@@ -25,7 +25,7 @@ export default function ResetPassword() {
       });
       toast.success("Security System Updated");
       navigate("/login");
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "Reset sequence failed");
     } finally {
       setLoading(false);

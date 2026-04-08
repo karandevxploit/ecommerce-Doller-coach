@@ -39,8 +39,9 @@ export default function Register() {
       await api.post("/auth/register", formValues);
       toast.success("Check your email for the 6-digit code.");
       navigate(`/verify?email=${encodeURIComponent(formValues.email)}&purpose=signup`);
-    } catch {
-      toast.error(err?.response?.data?.message || "Registration failed.");
+    } catch (err) {
+      console.log(err);
+      toast.error(err?.response?.data?.message || "Registration failed. Please try again.");
     }
   };
 

@@ -17,7 +17,7 @@ export default function ForgotPassword() {
       await api.post("/auth/send-otp", { email });
       toast.success("Security Update Sent");
       navigate(`/verify-reset-otp?email=${encodeURIComponent(email)}`);
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "Failed to emit update");
     } finally {
       setLoading(false);

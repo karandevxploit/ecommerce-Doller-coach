@@ -35,7 +35,7 @@ export default function Home() {
 
         setProducts(productList.map(mapProduct));
         setOffers(activeOffers);
-      } catch {
+      } catch (err) {
         toast.error("Error loading: Core Product System");
       } finally {
         setLoading(false);

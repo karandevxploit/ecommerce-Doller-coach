@@ -56,10 +56,10 @@ export default function ProductPage() {
           const relRes = await api.get(`/products?category=${mapped.category}&limit=6`);
           const relData = relRes?.data || relRes?.items || (Array.isArray(relRes) ? relRes : []);
           setRelated(relData.map(mapProduct).filter((p) => (p._id || p.id) !== id));
-        } catch {
+        } catch (err) {
           setRelated([]);
         }
-      } catch {
+      } catch (err) {
         toast.error("Error loading: Product Details");
         setError("Synchronization failure");
       } finally {
@@ -73,7 +73,7 @@ export default function ProductPage() {
       try {
         const data = await api.get(`/orders/check-review/${id}`);
         setCanReview(data.canReview);
-      } catch {
+      } catch (err) {
         setCanReview(false);
       }
     };
@@ -88,7 +88,7 @@ export default function ProductPage() {
     try {
       const data = await api.get(`/reviews/${id}`);
       setReviews(Array.isArray(data) ? data.map(mapReview) : []);
-    } catch {
+    } catch (err) {
       setReviews([]);
     }
   };
@@ -108,7 +108,7 @@ export default function ProductPage() {
           text: product.description,
           url,
         }); 
-      } catch {
+      } catch (err) {
         if (err.name !== "AbortError") toast.error("Share failed");
       }
     } else {
@@ -163,7 +163,7 @@ export default function ProductPage() {
       setReviewForm({ rating: 5, comment: "" });
       setIsReviewOpen(false);
       loadReviews();
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "Submit failure");
     } finally {
       setSubmittingReview(false);
@@ -175,7 +175,7 @@ export default function ProductPage() {
     try {
       await api.post("/wishlist", { productId: product._id || product.id });
       toast.success("Iduser Saved");
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "Save failure");
     }
   };

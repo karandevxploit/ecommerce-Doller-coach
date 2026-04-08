@@ -1,6 +1,7 @@
 const path = require("path");
 const dotenv = require("dotenv");
 dotenv.config({ path: path.join(__dirname, ".env") });
+const logger = require("./utils/logger");
 
 const express = require("express");
 const mongoose = require("mongoose");
@@ -10,10 +11,10 @@ const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const compression = require("compression");
 
-console.log("--- SYSTEM STARTUP ---");
-console.log("PORT:", process.env.PORT || 7000);
-console.log("ADMIN_SECRET loaded:", Boolean(process.env.ADMIN_SECRET));
-console.log("----------------------");
+logger.info("--- SYSTEM STARTUP ---");
+logger.info(`PORT: ${process.env.PORT || 7000}`);
+logger.info(`ADMIN_SECRET loaded: ${Boolean(process.env.ADMIN_SECRET)}`);
+logger.info("----------------------");
 
 process.on("uncaughtException", (err) => {
   console.error("CRITICAL: Uncaught Exception! Shutting down...");
@@ -28,7 +29,6 @@ process.on("unhandledRejection", (err) => {
 });
 
 const mongoSanitize = require("express-mongo-sanitize");
-const logger = require("./utils/logger");
 const env = require("./config/env");
 
 const authRoutes = require("./routes/auth.routes");
@@ -69,15 +69,22 @@ const allowedOrigins = (env.CLIENT_URL || "")
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps or curl requests) in dev
-      if (!origin && env.NODE_ENV === "development") return callback(null, true);
+      // Allow requests with no origin (like mobile apps, health checks, or curl requests)
+      // Also handle cases where origin might be sent as the string "undefined" or "null"
+      if (!origin || origin === "undefined" || origin === "null") {
+        return callback(null, true);
+      }
+      
       // In production, enforce strictly. If origin exists and matches, allow it.
       if (allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-      if (env.NODE_ENV === "development") {
+      
+      // Also allow localhost in development
+      if (env.NODE_ENV === "development" && origin.includes("localhost")) {
         return callback(null, true);
       }
+      
       logger.warn(`Blocked CORS request from origin: ${origin}`);
       return callback(new Error("Not allowed by CORS"), false);
     },

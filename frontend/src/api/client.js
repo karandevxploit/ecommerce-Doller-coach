@@ -2,7 +2,11 @@ import axios from "axios";
 import toast from "react-hot-toast";
 import { translateError } from "../utils/userFriendlyErrors";
 
-const baseURL = import.meta.env.VITE_API_URL || "http://localhost:7000/api";
+const baseURL = import.meta.env.VITE_API_URL || (import.meta.env.MODE === "development" ? "http://localhost:7000/api" : "");
+if (!baseURL && import.meta.env.MODE === "production") {
+  console.error("[CRITICAL] VITE_API_URL is missing in production environment!");
+}
+
 const PUBLIC_PREFIXES = ["/config", "/products", "/reviews", "/auth", "/orders/check-review"];
 
 export const api = axios.create({
@@ -21,7 +25,7 @@ const getAuthToken = () => {
       return parsed.state?.token || null;
     }
     return localStorage.getItem("token");
-  } catch {
+  } catch (err) {
     return null;
   }
 };
@@ -36,8 +40,6 @@ api.interceptors.request.use(
     const onAdminPage = window.location.pathname.startsWith("/admin");
     const isAdminRoute = reqUrl.startsWith("/admin") || reqUrl.includes("/admin/") || reqUrl.startsWith("/upload");
     
-    // Removed unused isPublicRoute declaration
-    
     // Recovery: Try all possible token locations
     const adminToken = localStorage.getItem("adminToken");
     const userToken = getAuthToken() || localStorage.getItem("token");
@@ -47,16 +49,9 @@ api.interceptors.request.use(
 
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
-      if (import.meta.env.MODE === "development") {
-        console.log(`[API Auth] Header set for: ${reqUrl}`);
-      }
-    } else if (isAdminRoute) {
-      // Only warn for protected administrative endpoints
+    } else if (isAdminRoute && import.meta.env.MODE === "development") {
+      // Only warn for protected administrative endpoints in dev
       console.warn(`[client] Missing admin credentials for: ${reqUrl}`);
-    }
-    
-    if (import.meta.env.MODE === "development") {
-      console.log(`[API Request] ${config.method?.toUpperCase()} ${config.url}`, config.data || "");
     }
     
     return config;

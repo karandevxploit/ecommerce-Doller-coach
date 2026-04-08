@@ -19,7 +19,7 @@ export default function CouponBox({ code, discountText }) {
       setCopied(true);
       toast.success("Coupon Copied!");
       setTimeout(() => setCopied(false), 2000);
-    } catch {
+    } catch (err) {
       toast.error("Failed to copy code.");
     }
   };

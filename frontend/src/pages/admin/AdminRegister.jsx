@@ -25,7 +25,7 @@ export default function AdminRegister() {
       try {
         const res = await api.get("/auth/admin-exists");
         if (mounted) setAdminExists(Boolean(res?.exists));
-      } catch {
+      } catch (err) {
         // ignore
       }
     })();
@@ -83,7 +83,7 @@ export default function AdminRegister() {
         navigate("/admin/login", { replace: true });
       }, 2000);
       
-    } catch {
+    } catch (err) {
       const msg = err?.response?.data?.message || "Registration failed";
       const friendlyMsg = formatError(msg);
       setError(friendlyMsg);

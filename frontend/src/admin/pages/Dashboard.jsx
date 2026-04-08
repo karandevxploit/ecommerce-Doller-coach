@@ -14,7 +14,7 @@ export default function Dashboard() {
       try {
         const res = await api.get("/admin/stats");
         setStats(res || null);
-      } catch {
+      } catch (err) {
         toast.error("Analytics fetch failed");
       } finally {
         setLoading(false);
@@ -72,7 +72,7 @@ export default function Dashboard() {
       link.remove();
       
       toast.success("Report downloaded", { id: "export" });
-    } catch {
+    } catch (err) {
       toast.error("Export failure", { id: "export" });
     }
   };

@@ -49,7 +49,7 @@ export default function Settings() {
       await uploadLogo(logoFile);
       toast.success("Logo updated successfully");
       setLogoFile(null);
-    } catch {
+    } catch (err) {
       toast.error("Logo upload failed");
     } finally {
       setLoading(false);
@@ -62,7 +62,7 @@ export default function Settings() {
     try {
       await updateConfig(formData);
       toast.success("Settings saved");
-    } catch {
+    } catch (err) {
       toast.error("Failed to save settings");
     } finally {
       setLoading(false);

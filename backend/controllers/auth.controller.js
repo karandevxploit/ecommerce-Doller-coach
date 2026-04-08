@@ -155,8 +155,7 @@ exports.login = asyncHandler(async (req, res) => {
     });
   }
 
-  const token = signToken(user);
-  return ok(res, { token, user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role } }, "Login successful");
+  return sendTokens(res, user, "Login successful");
 });
 
 const sendTokens = (res, user, message = "Success") => {
@@ -230,8 +229,7 @@ exports.verifyEmailOtp = asyncHandler(async (req, res) => {
     }, "Email verified, phone verification required");
   }
 
-  const token = signToken(user);
-  return ok(res, { token, user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role } }, "Email verified successfully");
+  return sendTokens(res, user, "Email verified successfully");
 });
 
 exports.verifyPhoneOtp = asyncHandler(async (req, res) => {
@@ -251,8 +249,7 @@ exports.verifyPhoneOtp = asyncHandler(async (req, res) => {
     }, "Phone verified, email verification required");
   }
 
-  const token = signToken(user);
-  return ok(res, { token, user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role } }, "Phone verified successfully");
+  return sendTokens(res, user, "Phone verified successfully");
 });
 
 exports.resendEmailOtp = asyncHandler(async (req, res) => {

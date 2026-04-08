@@ -10,7 +10,7 @@ export const useConfigStore = create((set) => ({
     try {
       const data = await api.get("/config");
       set({ config: data });
-    } catch {
+    } catch (err) {
       console.error("Failed to fetch brand config", err);
     } finally {
       set({ loading: false });
@@ -22,7 +22,7 @@ export const useConfigStore = create((set) => ({
       const data = await api.put("/admin/config", payload);
       set({ config: data });
       return data;
-    } catch {
+    } catch (err) {
       console.error("Failed to update config", err);
       throw err;
     }
@@ -37,7 +37,7 @@ export const useConfigStore = create((set) => ({
       });
       set((state) => ({ config: { ...state.config, logo: data.logo } }));
       return data.logo;
-    } catch {
+    } catch (err) {
       console.error("Failed to upload logo", err);
       throw err;
     }

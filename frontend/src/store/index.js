@@ -42,7 +42,7 @@ export const useAuthStore = create(
             return true;
           }
           return false;
-        } catch {
+        } catch (err) {
           console.error("Auth Store Error:", err);
           throw err;
         } finally {
@@ -91,7 +91,7 @@ export const useAuthStore = create(
             isAuthenticated: true, 
             isAdminAuthenticated: isAdmin 
           });
-        } catch {
+        } catch (err) {
           get().logout();
         } finally {
           set({ loading: false });
@@ -117,7 +117,7 @@ export const useAuthStore = create(
           const res = await api.get("/auth/addresses");
           const list = res.data || [];
           set({ addresses: Array.isArray(list) ? list : [] });
-        } catch {
+        } catch (err) {
           console.error("Failed to fetch addresses", err);
         }
       },
@@ -128,7 +128,7 @@ export const useAuthStore = create(
           const data = res.data || res;
           set((state) => ({ addresses: [data, ...(state.addresses || [])] }));
           return data;
-        } catch {
+        } catch (err) {
           toast.error(err.response?.data?.message || "Failed to add address");
           throw err;
         }
@@ -139,7 +139,7 @@ export const useAuthStore = create(
           await api.delete(`/auth/addresses/${id}`);
           set((state) => ({ addresses: state.addresses.filter((a) => (a.id || a._id) !== id) }));
           toast.success("Address removed");
-        } catch {
+        } catch (err) {
           toast.error("Failed to remove address");
         }
       },
@@ -154,7 +154,7 @@ export const useAuthStore = create(
             })),
           }));
           toast.success("Default address updated");
-        } catch {
+        } catch (err) {
           toast.error("Failed to set default address");
         }
       },
@@ -182,7 +182,7 @@ export const useCartStore = create((set, get) => ({
     try {
       await api.post("/cart", { productId, quantity, size, topSize, bottomSize });
       await get().fetchCart();
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "Failed to add item");
       throw err;
     }
@@ -192,7 +192,7 @@ export const useCartStore = create((set, get) => ({
     try {
       await api.put("/cart", { productId, quantity });
       await get().fetchCart();
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "Failed to update cart");
       throw err;
     }
@@ -202,7 +202,7 @@ export const useCartStore = create((set, get) => ({
     try {
       await api.delete(`/cart/${productId}`);
       await get().fetchCart();
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "Failed to remove item");
       throw err;
     }
@@ -243,7 +243,7 @@ export const useWishlistStore = create((set, get) => ({
         set({ items: [mapProduct(newItem), ...items] });
         toast.success("Added to curation.");
       }
-    } catch {
+    } catch (err) {
       toast.error("Curation Sync Failure");
     }
   },

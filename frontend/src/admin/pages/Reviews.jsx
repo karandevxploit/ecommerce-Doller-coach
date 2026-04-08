@@ -34,7 +34,7 @@ export default function Reviews() {
       const data = res.data || res.reviews || res || [];
       const mapped = Array.isArray(data) ? data.map(mapReview) : [];
       setReviews(mapped);
-    } catch {
+    } catch (err) {
       toast.error("Cloud synchronization failed");
     } finally {
       setLoading(false);
@@ -50,7 +50,7 @@ export default function Reviews() {
       await api.put(`/reviews/admin/${id}/approve`);
       toast.success("Sentiment Validated & Published");
       fetchReviews();
-    } catch {
+    } catch (err) {
       toast.error("Activation Failure");
     }
   };
@@ -61,7 +61,7 @@ export default function Reviews() {
       await api.delete(`/reviews/admin/${id}`);
       toast.success("Signal Purged Successfully");
       fetchReviews();
-    } catch {
+    } catch (err) {
       toast.error("Purge Protocol Failure");
     }
   };

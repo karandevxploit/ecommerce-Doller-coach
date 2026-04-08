@@ -28,7 +28,7 @@ export default function Search() {
         if (!cancelled) {
           setProducts(Array.isArray(data) ? data.map(mapProduct) : []);
         }
-      } catch {
+      } catch (err) {
         toast.error("Error loading: Search Database");
       } finally {
         if (!cancelled) setLoading(false);

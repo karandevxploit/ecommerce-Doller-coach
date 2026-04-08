@@ -19,7 +19,7 @@ export default function Orders() {
       // Log removed for production
       const mapped = Array.isArray(data) ? data.map(mapOrder) : [];
       setOrders(mapped);
-    } catch {
+    } catch (err) {
       console.error("ORDERS FETCH ERROR:", err.response?.data || err.message);
       toast.error("Failed to sync orders manifest");
       setOrders([]);
@@ -48,7 +48,7 @@ export default function Orders() {
         status: status,
       });
       toast.success(`Order ${status.toUpperCase()} Successfully`);
-    } catch {
+    } catch (err) {
       console.error("STATUS UPDATE ERROR:", err.response?.data || err.message);
       toast.error("Failed to update status");
       // Rollback on failure
@@ -62,7 +62,7 @@ export default function Orders() {
       const data = await api.get(`/orders/${id}`);
       setselectedOrder(mapOrder(data?.data || data));
       toast.success("Details Loaded", { id: "viewing" });
-    } catch {
+    } catch (err) {
       console.error("VIEW ERROR:", err);
       toast.error("Failed to load full manifest", { id: "viewing" });
     }
@@ -88,7 +88,7 @@ export default function Orders() {
       window.URL.revokeObjectURL(url);
       
       toast.success("Invoice Downloaded Successfully", { id: "downloading" });
-    } catch {
+    } catch (err) {
       let message = "Failed to generate or download invoice.";
       
       // Axios error handling for Blobs
@@ -129,7 +129,7 @@ export default function Orders() {
       if (selectedOrder?.id === id) setselectedOrder(updatedOrder);
       
       toast.success("Payment Verified Instantly", { id: "payment" });
-    } catch {
+    } catch (err) {
       console.error("PAYMENT VERIFICATION ERROR:", err);
       toast.error(err.response?.data?.message || "Verification failed", { id: "payment" });
       // Rollback on failure

@@ -19,7 +19,7 @@ export default function Users() {
       const mapped = Array.isArray(data) ? data.map(mapUser) : [];
       setUsers(mapped);
       setFiltered(mapped);
-    } catch {
+    } catch (err) {
       toast.error("Failed to load customers");
     } finally {
       setLoading(false);

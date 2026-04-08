@@ -52,7 +52,7 @@ const AddressManager = ({ onSelect, selectedId }) => {
         const defaultAddr = data.find(a => a.isDefault) || data[0];
         onSelect(defaultAddr);
       }
-    } catch {
+    } catch (err) {
       toast.error("Cloud address sync failure");
     }
   };
@@ -88,7 +88,7 @@ const AddressManager = ({ onSelect, selectedId }) => {
         } else {
           setErrors(prev => ({ ...prev, pincode: 'Invalid Indian Pincode' }));
         }
-      } catch {
+      } catch (err) {
         // Silent fail on lookup
       } finally {
         setPincodeLoading(false);
@@ -155,7 +155,7 @@ const AddressManager = ({ onSelect, selectedId }) => {
         name: '', phone: '', addressLine1: '', city: '', state: '', pincode: '',
         label: 'Home', latitude: 20.5937, longitude: 78.9629
       });
-    } catch {
+    } catch (err) {
       toast.error(err.response?.data?.message || "Failed to persist address");
     } finally {
       setLoading(false);
@@ -169,7 +169,7 @@ const AddressManager = ({ onSelect, selectedId }) => {
       await api.delete(`/auth/addresses/${id}`);
       setAddresses(prev => prev.filter(a => (a._id || a.id) !== id));
       toast.success("Address Purged");
-    } catch {
+    } catch (err) {
       toast.error("Purge failure");
     }
   };
@@ -195,7 +195,7 @@ const AddressManager = ({ onSelect, selectedId }) => {
               pincode: addr.postcode || prev.pincode
             }));
           }
-        } catch {} finally { setGeoLoading(false); }
+        } catch (err) {} finally { setGeoLoading(false); }
       },
       () => { setGeoLoading(false); toast.error("GPS access blocked"); }
     );

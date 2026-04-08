@@ -164,7 +164,7 @@ function OrderSuccess() {
         const res = await api.get(`/orders/${id}`);
         const mapped = mapOrder(res);
         if (!cancelled) setOrder(mapped);
-      } catch {
+      } catch (err) {
         console.error("Order fetch error:", err);
       } finally {
         if (!cancelled) setLoading(false);

@@ -46,7 +46,7 @@ export default function Offers() {
           ? data.map(mapOffer).map((o, i) => ({ ...o, raw: data[i] }))
           : []
       );
-    } catch {
+    } catch (err) {
       toast.error("Marketing order sync failed");
     } finally {
       setLoading(false);
@@ -126,7 +126,7 @@ export default function Offers() {
       const imageUrl = await uploadImage(file);
       updateField("image", imageUrl);
       toast.success("Visual Save Complete");
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "Visual Save Failure");
     } finally {
       setUploading(false);
@@ -167,7 +167,7 @@ export default function Offers() {
       }
       setFormOpen(false);
       fetchOffers();
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "Save Failure");
     } finally {
       setSaving(false);
@@ -180,7 +180,7 @@ export default function Offers() {
       await api.delete(`/admin/offers/${id}`);
       toast.success("Order Deleted");
       fetchOffers();
-    } catch {
+    } catch (err) {
       toast.error("Delete Failure");
     }
   };

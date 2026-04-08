@@ -57,7 +57,7 @@ export default function Collection() {
           page: 1,
           hasNextPage: data.meta?.hasNextPage || false
         });
-      } catch {
+      } catch (err) {
         console.error("Collection Load Error:", err);
         setProducts([]);
       } finally {
@@ -89,7 +89,7 @@ export default function Collection() {
         page: nextPage,
         hasNextPage: data.meta?.hasNextPage || false
       });
-    } catch {
+    } catch (err) {
       console.error("Load More error:", err);
     } finally {
       setFetchingMore(false);

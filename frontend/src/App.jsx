@@ -53,7 +53,7 @@ function App() {
         if (token) {
           await fetchUser();
         }
-      } catch {
+      } catch (err) {
         console.error("Initialization failed:", err);
       } finally {
         setTimeout(() => setIsInitializing(false), 800); // Small delay for brand consistency

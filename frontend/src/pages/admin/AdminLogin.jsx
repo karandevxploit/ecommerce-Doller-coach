@@ -22,7 +22,7 @@ export default function AdminLogin() {
       try {
         const res = await api.get("/auth/admin-exists");
         if (mounted) setShowRegisterHint(!res?.exists);
-      } catch {
+      } catch (err) {
         // ignore
       }
     })();
@@ -62,7 +62,7 @@ export default function AdminLogin() {
       } else {
         setError("Invalid credentials");
       }
-    } catch {
+    } catch (err) {
       if (err?.response?.status === 403) {
         const msg = "Wrong portal access. Admin only.";
         setError(msg);

@@ -50,7 +50,7 @@ export default function Checkout() {
         const res = await api.get("/coupons");
         const list = Array.isArray(res) ? res : res.data || [];
         setAvailableCoupons(list);
-      } catch {
+      } catch (err) {
         console.error("Coupon Discovery Error:", err);
       }
     };
@@ -86,7 +86,7 @@ export default function Checkout() {
         setDiscountAmount(0);
         setHasAppliedCoupon(false);
       }
-    } catch {
+    } catch (err) {
       toast.error(err.response?.data?.message || err.message || "Validation technical failure");
       setDiscountAmount(0);
       setHasAppliedCoupon(false);
@@ -138,7 +138,7 @@ export default function Checkout() {
               toast.error("Verification failed");
               resolve(false);
             }
-          } catch {
+          } catch (err) {
             toast.error("Payment verification error");
             reject(err);
           }
@@ -209,7 +209,7 @@ export default function Checkout() {
         await fetchCart();
         navigate(`/order-success/${orderId}`);
       }
-    } catch {
+    } catch (err) {
       console.error("Checkout Error:", err.response?.data || err.message);
       toast.error(err.response?.data?.message || "Checkout failed");
     } finally {

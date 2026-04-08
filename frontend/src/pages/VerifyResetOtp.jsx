@@ -26,7 +26,7 @@ export default function VerifyResetOtp() {
       navigate(
         `/reset-password?email=${encodeURIComponent(email)}&token=${encodeURIComponent(resetToken)}`
       );
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "OTP sync failed");
     } finally {
       setLoading(false);

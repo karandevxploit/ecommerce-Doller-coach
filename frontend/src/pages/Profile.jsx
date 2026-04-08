@@ -70,7 +70,7 @@ export default function Profile() {
         } else {
           toast.error("Reverse Geocoding Failed");
         }
-      } catch {
+      } catch (err) {
         toast.error("Location Save Error");
       } finally {
         setLoading(false);
@@ -94,7 +94,7 @@ export default function Profile() {
         const rawOrders = ordRes?.orders || ordRes;
         const ordersData = Array.isArray(rawOrders) ? rawOrders.map(mapOrder) : [];
         setOrders(ordersData);
-      } catch {
+      } catch (err) {
         console.error("Orders sync failed:", err.message);
         toast.error("Error loading: Account Logs");
         setOrders([]);
@@ -113,7 +113,7 @@ export default function Profile() {
       const res = await api.get("/auth/addresses");
       setAddresses(Array.isArray(res) ? res : []);
       setAddressForm({ name: "", phone: "", addressLine1: "", city: "", state: "", pincode: "" });
-    } catch {
+    } catch (err) {
       toast.error(err?.response?.data?.message || "Save failure");
     }
   };

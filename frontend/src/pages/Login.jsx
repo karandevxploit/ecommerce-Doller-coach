@@ -26,7 +26,7 @@ export default function Login() {
     try {
       await login({ ...formValues, provider: "email" }, "login");
       navigate("/");
-    } catch {
+    } catch (err) {
       const msg = err?.response?.data?.message || "Invalid credentials";
       toast.error(msg);
     }
@@ -38,7 +38,7 @@ export default function Login() {
       await api.post("/auth/request-login-otp", { email: values.email });
       toast.success("If this email is registered, you will receive an OTP.");
       setOtpMode(true);
-    } catch {
+    } catch (err) {
       toast.error("Could not send OTP.");
     }
   };
@@ -50,7 +50,7 @@ export default function Login() {
       const res = await api.post("/auth/verify-otp", { email: values.email, otp, purpose: "login" });
       setSession(res);
       navigate("/");
-    } catch {
+    } catch (err) {
       toast.error("Invalid OTP.");
     }
   };
@@ -179,7 +179,7 @@ export default function Login() {
                     try {
                       await login({ credential: credentialResponse.credential }, "google");
                       navigate("/");
-                    } catch {
+                    } catch (err) {
                       const msg = err?.response?.data?.message || "";
                       if (msg.includes("origin") || msg.includes("allowed")) {
                         toast.error("Google Origin Mismatch: Add http://localhost:3000 to Google Cloud Console.");

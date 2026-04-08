@@ -12,7 +12,7 @@ export default function Topbar({ onMenuClick }) {
       try {
         const data = await api.get("/admin/notifications");
         if (!cancelled) setNotes(Array.isArray(data) ? data : []);
-      } catch {
+      } catch (err) {
         if (!cancelled) setNotes([]);
       }
     })();

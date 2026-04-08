@@ -26,7 +26,7 @@ export default function NotificationsDropdown() {
     try {
       const data = await api.get("/notifications/my");
       setNotifications(Array.isArray(data) ? data : []);
-    } catch {
+    } catch (err) {
       toast.error("Failed to load notifications");
     } finally {
       setLoading(false);
@@ -49,7 +49,7 @@ export default function NotificationsDropdown() {
             : n
         )
       );
-    } catch {
+    } catch (err) {
       toast.error("Failed to mark as read");
     }
   };
@@ -142,7 +142,7 @@ export default function NotificationsDropdown() {
                     }))
                   );
                   toast.success("Iduser Saveed");
-                } catch {
+                } catch (err) {
                   toast.error("Save Failed");
                 }
               }}

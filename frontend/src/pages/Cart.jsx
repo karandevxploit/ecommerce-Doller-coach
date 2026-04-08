@@ -36,7 +36,7 @@ export default function Cart() {
         const data = Array.isArray(res) ? res : res?.data || res?.products || [];
         const mapped = Array.isArray(data) ? data.map(mapProduct) : [];
         setSuggestions(mapped.filter((p) => !items.some((i) => (i._id || i.id) === (p._id || p.id))).slice(0, 4));
-      } catch {
+      } catch (err) {
         setSuggestions([]);
       }
     };

@@ -35,7 +35,7 @@ export default function VerifyOtp() {
       setSession(res);
       toast.success("Verified");
       navigate("/");
-    } catch {
+    } catch (err) {
       toast.error("Invalid or expired OTP.");
     } finally {
       setLoading(false);
