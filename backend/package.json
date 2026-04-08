@@ -8,8 +8,8 @@
     "start": "node server.js",
     "seed:admin": "node scripts/seedAdmin.js",
     "test": "jest --detectOpenHandles --forceExit",
-    "clear-port": "npx kill-port 8001",
-    "prestart": "npm run clear-port || true"
+    "clear-port": "node scripts/clearPort.js",
+    "prestart": "npm run clear-port || cd ."
   },
   "dependencies": {
     "@sparticuz/chromium-min": "^143.0.4",

@@ -250,6 +250,18 @@ if (require.main === module) {
     logger.info(`Mode: ${env.NODE_ENV}`);
   });
 
+  server.on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      logger.error(`Port ${env.PORT} is already in use. Retrying in 1s...`);
+      setTimeout(() => {
+        server.close();
+        server.listen(env.PORT, "0.0.0.0");
+      }, 1000);
+    } else {
+      logger.error("Server Start Error:", err);
+    }
+  });
+
   // 2. Initialize DB and Maintenance in background
   connectDB().then(async () => {
     try {

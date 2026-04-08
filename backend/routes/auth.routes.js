@@ -16,6 +16,7 @@ const {
   resetPassword,
   requestLoginOtp,
   testEmail,
+  testOrderEmail,
 } = require("../controllers/auth.hybrid.controller");
 
 const { googleAuth } = require("../controllers/auth.controller");
