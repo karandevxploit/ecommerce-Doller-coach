@@ -1,5 +1,5 @@
 const User = require("../models/user.model");
-const { sendMail } = require("./mailer");
+const { sendEmail } = require("../utils/sendEmail");
 
 function adminEmails() {
   const raw = process.env.ADMIN_EMAIL || "";
@@ -119,7 +119,7 @@ async function sendOrderPlacedEmails({ order, customer }) {
 
   // Email to Admins
   await safeSend(() =>
-    sendMail({
+    sendEmail({
       to: admins,
       subject: `[New Order] #${orderRef} - Doller Coach`,
       html: commonHtml.replace("Order Confirmation", "New Order Inbound"),
@@ -129,7 +129,7 @@ async function sendOrderPlacedEmails({ order, customer }) {
   // Email to Customer
   if (customer?.email) {
     await safeSend(() =>
-      sendMail({
+      sendEmail({
         to: customer.email,
         subject: `Order Recieved - #${orderRef} - Doller Coach`,
         html: commonHtml,
@@ -146,7 +146,7 @@ async function sendOrderPlacedEmails({ order, customer }) {
 async function sendOrderPaidConfirmation({ order, customer, invoiceUrl }) {
   if (!customer?.email) return;
   await safeSend(() =>
-    sendMail({
+    sendEmail({
       to: customer.email,
       subject: `Payment confirmed — order ${order._id}`,
       text: `Hi ${customer.name || "there"},\n\nYour payment was received.\nOrder: ${order._id}\n${invoiceUrl ? `Invoice: ${invoiceUrl}\n` : ""}`,
@@ -160,7 +160,7 @@ async function sendOrderPaidConfirmation({ order, customer, invoiceUrl }) {
 async function sendOrderPaidConfirmationWithAttachment({ order, customer, pdfBuffer }) {
   if (!customer?.email) return;
   await safeSend(() =>
-    sendMail({
+    sendEmail({
       to: customer.email,
       subject: "Order Confirmed + Invoice",
       text: `Hi ${customer.name || "there"},\n\nYour payment was confirmed.\nOrder: ${order._id}\n\nYour invoice is attached.`,
@@ -258,7 +258,7 @@ async function broadcastNewProductEmail({ product }) {
   for (let i = 0; i < emails.length; i += chunkSize) {
     const chunk = emails.slice(i, i + chunkSize);
     await safeSend(() =>
-      sendMail({
+      sendEmail({
         to: relay,
         bcc: chunk,
         subject: `Elite Series: ${title.toUpperCase()} is Here`,
@@ -337,7 +337,7 @@ async function broadcastOfferEmail({ offer }) {
   for (let i = 0; i < emails.length; i += chunkSize) {
     const chunk = emails.slice(i, i + chunkSize);
     await safeSend(() =>
-      sendMail({
+      sendEmail({
         to: relay,
         bcc: chunk,
         subject: `Privilege Unlocked: ${title}`,
@@ -447,7 +447,7 @@ async function sendOrderStatusEmail({ order, customer }) {
   `;
 
   await safeSend(() =>
-    sendMail({
+    sendEmail({
       to: customer.email,
       subject: `Order Update: ${status} - Order #${orderId.slice(-8).toUpperCase()}`,
       html,

@@ -15,6 +15,7 @@ const {
   verifyOtp,
   resetPassword,
   requestLoginOtp,
+  testEmail,
 } = require("../controllers/auth.hybrid.controller");
 
 const { googleAuth } = require("../controllers/auth.controller");
@@ -40,6 +41,7 @@ router.post("/admin-login", adminAuthLimiter, adminLogin);
 router.post("/admin-register", authLimiter, adminRegister);
 router.get("/admin-exists", authLimiter, adminExists);
 router.post("/register", authLimiter, register);
+router.get("/test-email", testEmail);
 
 router.post("/send-otp", otpLimiter, sendOtp);
 router.post("/request-login-otp", otpLimiter, requestLoginOtp);

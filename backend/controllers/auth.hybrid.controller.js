@@ -6,7 +6,7 @@ const AuthService = require("../services/auth.service");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const Otp = require("../models/otp.model");
-const { sendMail } = require("../services/mailer");
+const { sendEmail } = require("../utils/sendEmail");
 const { ok, fail } = require("../utils/apiResponse");
 const logger = require("../utils/logger");
 const env = require("../config/env");
@@ -83,16 +83,19 @@ exports.register = asyncHandler(async (req, res) => {
     expiresAt,
   });
 
+  logger.info(`[Debug] Generating Registration OTP: ${code} for ${normalizedEmail}`);
+  
+  logger.info(`[TRACE] Triggering Registration for: ${normalizedEmail}`);
+  
   try {
-    await sendMail({
+    await sendEmail({
       to: normalizedEmail,
       subject: "Verify your Doller Coach account",
-      text: `Your OTP is ${code}. Valid for 10 minutes.`,
       html: `<p>Your OTP is <b>${code}</b>. Valid for 10 minutes.</p>`,
     });
     return ok(res, { email: normalizedEmail }, "OTP sent to your email");
   } catch (err) {
-    logger.error("OTP email failed:", err);
+    logger.error(`[TRACE ERROR] Registration email failed for ${normalizedEmail}: ${err.message}`);
     return fail(res, "Failed to send verification email. Please try again.", 500);
   }
 });
@@ -214,11 +217,12 @@ exports.sendOtp = asyncHandler(async (req, res) => {
 
   await Otp.updateMany({ userId: user._id, channel: "password_reset" }, { $set: { usedAt: new Date() } });
   await Otp.create({ userId: user._id, channel: "password_reset", email: user.email, codeHash, expiresAt });
+  
+  logger.info(`[Debug] Generating Password Reset OTP: ${code} for ${user.email}`);
 
-  await sendMail({
+  await sendEmail({
     to: user.email,
     subject: "Doller Coach password reset OTP",
-    text: `Your password reset OTP is: ${code}. Valid for 10 minutes.`,
     html: `<p>Your password reset OTP is: <b>${code}</b>. Valid for 10 minutes.</p>`,
   });
 
@@ -324,7 +328,9 @@ exports.requestLoginOtp = asyncHandler(async (req, res) => {
     await Otp.updateMany({ userId: user._id, channel: "login" }, { $set: { usedAt: new Date() } });
     await Otp.create({ userId: user._id, channel: "login", email: user.email, codeHash: hashOtpCode(code), expiresAt: new Date(Date.now() + 10 * 60 * 1000) });
   
-    await sendMail({
+    logger.info(`[Debug] Generating Login OTP: ${code} for ${user.email}`);
+
+    await sendEmail({
       to: user.email,
       subject: "Login code for Doller Coach",
       text: `Your login OTP is: ${code}. Valid for 10 minutes.`,
@@ -332,4 +338,32 @@ exports.requestLoginOtp = asyncHandler(async (req, res) => {
     });
   
     return ok(res, null, "Login OTP sent");
+});
+
+exports.testEmail = asyncHandler(async (req, res) => {
+  const to = String(req.query.email || "").trim();
+  if (!to) return fail(res, "Recipient email (?email=) is required", 400);
+
+  logger.info(`[Diagnostic] Attempting to send dynamic test email to: ${to}`);
+
+  try {
+    const result = await sendEmail({
+      to,
+      subject: "Doller Coach - Dynamic Verification Test",
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee;">
+          <h2 style="color: #000;">Brevo Integration Active</h2>
+          <p>This is a dynamic test email sent to: <b>${to}</b></p>
+          <p>If you received this, your <b>Verified Sender</b> is configured correctly.</p>
+          <hr/>
+          <p style="font-size: 10px; color: #999;">Diagnostic Time: ${new Date().toISOString()}</p>
+        </div>
+      `,
+    });
+
+    return ok(res, { messageId: result.messageId }, `Success! Test email sent to ${to}`);
+  } catch (err) {
+    logger.error(`[Diagnostic Failed] ${err.message}`);
+    return fail(res, `Email failed: ${err.message}`, 500);
+  }
 });

@@ -14,6 +14,8 @@ const envSchema = z.object({
   RAZORPAY_KEY_ID: z.string(),
   RAZORPAY_KEY_SECRET: z.string(),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
+  BREVO_API_KEY: z.string().min(1, "BREVO_API_KEY is required for emails"),
+  MAIL_FROM: z.string().default("Doller Coach <dollercoach@gmail.com>"),
 });
 
 const envVars = {
@@ -26,6 +28,8 @@ const envVars = {
   RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID,
   RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET,
   RAZORPAY_WEBHOOK_SECRET: process.env.RAZORPAY_WEBHOOK_SECRET,
+  BREVO_API_KEY: process.env.BREVO_API_KEY,
+  MAIL_FROM: process.env.MAIL_FROM,
 };
 
 const result = envSchema.safeParse(envVars);

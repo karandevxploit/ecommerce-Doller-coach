@@ -6,8 +6,10 @@ const connectDB = async () => {
     const conn = await mongoose.connect(process.env.MONGO_URI, {
       // Use standard options for modern Mongoose (v6+)
       autoIndex: true,
-      serverSelectionTimeoutMS: 5000, 
+      serverSelectionTimeoutMS: 10000, 
       socketTimeoutMS: 45000,
+      heartbeatFrequencyMS: 10000,
+      family: 4, // Force IPv4 to avoid Atlas handshake timeouts in some networks
     });
 
     logger.info(`MongoDB Connected: ${conn.connection.host}`);

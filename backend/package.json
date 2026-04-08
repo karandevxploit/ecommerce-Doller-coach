@@ -7,7 +7,9 @@
     "dev": "nodemon server.js",
     "start": "node server.js",
     "seed:admin": "node scripts/seedAdmin.js",
-    "test": "jest --detectOpenHandles --forceExit"
+    "test": "jest --detectOpenHandles --forceExit",
+    "clear-port": "npx kill-port 8001",
+    "prestart": "npm run clear-port || true"
   },
   "dependencies": {
     "@sparticuz/chromium-min": "^143.0.4",
@@ -34,7 +36,6 @@
     "multer": "^2.1.1",
     "multer-storage-cloudinary": "^4.0.0",
     "node-cache": "^5.1.2",
-    "nodemailer": "^6.9.15",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "pdfkit": "^0.18.0",
@@ -42,6 +43,7 @@
     "puppeteer-core": "^24.40.0",
     "qrcode": "^1.5.4",
     "razorpay": "^2.9.6",
+    "sib-api-v3-sdk": "^8.5.0",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0",
     "zod": "^4.1.12"
