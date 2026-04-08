@@ -9,7 +9,7 @@ if (!rawURL) {
   if (import.meta.env.MODE === "production") {
     throw new Error("[CRITICAL] VITE_API_URL is not defined in environment.");
   }
-  rawURL = "http://localhost:7000/api";
+  rawURL = "http://localhost:8001/api";
 }
 
 // Standardization Logic: remove trailing slash and ensure /api exists

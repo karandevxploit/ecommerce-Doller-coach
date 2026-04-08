@@ -17,7 +17,7 @@ export const loginValidator = (values) => {
   else if (!validateEmail(values.email)) errors.email = "Invalid email format";
   
   if (!values.password) errors.password = "Password is required";
-  else if (values.password.length < 6) errors.password = "Min 6 characters required";
+  else if (values.password.length < 8) errors.password = "Min 8 characters required";
   
   return errors;
 };

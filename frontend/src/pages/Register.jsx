@@ -27,8 +27,8 @@ export default function Register() {
 
   const getPasswordStrength = (pass) => {
     if (!pass) return { score: 0, label: "", color: "bg-gray-200" };
-    if (pass.length < 6) return { score: 1, label: "Weak", color: "bg-red-500" };
-    if (pass.length < 10) return { score: 2, label: "Medium", color: "bg-yellow-500" };
+    if (pass.length < 8) return { score: 1, label: "Weak", color: "bg-red-500" };
+    if (pass.length < 12) return { score: 2, label: "Medium", color: "bg-yellow-500" };
     return { score: 3, label: "Strong", color: "bg-green-500" };
   };
 
@@ -40,7 +40,7 @@ export default function Register() {
       toast.success("Check your email for the 6-digit code.");
       navigate(`/verify?email=${encodeURIComponent(formValues.email)}&purpose=signup`);
     } catch (err) {
-      console.log(err);
+      console.error("[Register Error]:", err);
       toast.error(err?.response?.data?.message || "Registration failed. Please try again.");
     }
   };
