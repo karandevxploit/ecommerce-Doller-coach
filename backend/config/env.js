@@ -6,7 +6,7 @@ dotenv.config({ path: path.join(__dirname, "../.env") });
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
-  PORT: z.string().transform(Number).default("7000"),
+  PORT: z.string().transform(Number).default("1000"),
   MONGO_URI: z.string().url(),
   JWT_SECRET: z.string().min(32, "JWT_SECRET should be at least 32 characters"),
   REFRESH_TOKEN_SECRET: z.string().min(32, "REFRESH_TOKEN_SECRET should be at least 32 characters"),

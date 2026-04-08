@@ -16,6 +16,38 @@ logger.info(`PORT: ${process.env.PORT || 7000}`);
 logger.info(`ADMIN_SECRET loaded: ${Boolean(process.env.ADMIN_SECRET)}`);
 logger.info("----------------------");
 
+const app = express();
+
+// 1. Absolute CORS Priority (Nuclear Fix)
+const allowedOrigins = (env.CLIENT_URL || "")
+  .split(",")
+  .map((s) => s.trim().replace(/\/$/, ""))
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || origin === "undefined" || origin === "null") return callback(null, true);
+      const sanitizedOrigin = origin.replace(/\/$/, "");
+      
+      // Strict list check
+      if (allowedOrigins.includes(sanitizedOrigin)) return callback(null, true);
+      
+      // Dynamic Vercel Branch Support
+      if (/\.vercel\.app$/.test(sanitizedOrigin)) return callback(null, true);
+      
+      // Localhost bypass for dev
+      if (env.NODE_ENV === "development" && /localhost/.test(sanitizedOrigin)) return callback(null, true);
+      
+      logger.warn(`Rejected CORS request from origin: ${origin}`);
+      return callback(null, false);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+    optionsSuccessStatus: 200,
+  })
+);
 process.on("uncaughtException", (err) => {
   console.error("CRITICAL: Uncaught Exception! Shutting down...");
   console.error(err.name, err.message, err.stack);
@@ -43,6 +75,7 @@ const adminRoutes = require("./routes/admin.routes");
 const wishlistRoutes = require("./routes/wishlist.routes");
 const uploadRoutes = require("./routes/upload.routes");
 const couponRoutes = require("./routes/coupon.routes");
+const connectDB = require("./config/db");
 const configController = require("./controllers/config.controller");
 const { errorHandler, notFound } = require("./middlewares/error.middleware");
 
@@ -54,35 +87,8 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const User = require("./models/user.model");
 
-const app = express();
-
-// 1. Trust Proxy (Crucial for Render/Vercel)
+// 2. Trust Proxy (Crucial for Render/Vercel)
 app.set("trust proxy", 1);
-
-// 2. CORS (Absolute Priority)
-const allowedOrigins = (env.CLIENT_URL || "")
-  .split(",")
-  .map((s) => s.trim().replace(/\/$/, ""))
-  .filter(Boolean);
-
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || origin === "undefined" || origin === "null") return callback(null, true);
-      const sanitizedOrigin = origin.replace(/\/$/, "");
-      if (allowedOrigins.includes(sanitizedOrigin) || sanitizedOrigin.endsWith(".vercel.app")) {
-        return callback(null, true);
-      }
-      if (env.NODE_ENV === "development" && sanitizedOrigin.includes("localhost")) {
-        return callback(null, true);
-      }
-      return callback(null, false);
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
 
 // 3. Security & Optimization
 app.use(compression());
@@ -91,7 +97,7 @@ app.use(helmet({
 }));
 app.use(mongoSanitize());
 
-// Handlers removed from here (moved up)
+// End of Nuclear CORS block
 
 app.use(express.json({ 
   limit: "10mb",
@@ -238,26 +244,20 @@ app.use(notFound);
 app.use(errorHandler);
 
 if (require.main === module) {
-  mongoose
-    .connect(env.MONGO_URI)
-    .then(async () => {
-      logger.info("MongoDB Connected");
-      try {
-        await User.updateMany({ googleId: null }, { $unset: { googleId: 1 } });
-      } catch (e) {
-        logger.warn("googleId null cleanup failed", { error: e.message });
-      }
-      app.listen(env.PORT, () => {
-        logger.info(`Backend running on ${env.PORT} in ${env.NODE_ENV} mode`);
-      });
-    })
-    .catch((err) => {
-      logger.error("DB connection failed", { error: err.message });
-      process.exit(1);
+  // 1. Establish Database Connection first
+  connectDB().then(async () => {
+    try {
+      // 2. Perform minor startup maintenance
+      await User.updateMany({ googleId: null }, { $unset: { googleId: 1 } });
+    } catch (e) {
+      logger.warn("googleId null cleanup failed during startup", { error: e.message });
+    }
+
+    // 3. Start listening only when DB is ready
+    app.listen(env.PORT, () => {
+      logger.info(`Backend running on ${env.PORT} in ${env.NODE_ENV} mode`);
     });
+  });
 }
 
 module.exports = app;
-
-
-
