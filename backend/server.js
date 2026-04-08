@@ -56,43 +56,26 @@ const User = require("./models/user.model");
 
 const app = express();
 
-app.use(compression());
-app.use(helmet({
-  contentSecurityPolicy: env.NODE_ENV === "production" ? undefined : false,
-}));
-app.use(mongoSanitize());
+// 1. Trust Proxy (Crucial for Render/Vercel)
+app.set("trust proxy", 1);
 
+// 2. CORS (Absolute Priority)
 const allowedOrigins = (env.CLIENT_URL || "")
   .split(",")
-  .map((s) => s.trim().replace(/\/$/, "")) // Strip trailing slash
+  .map((s) => s.trim().replace(/\/$/, ""))
   .filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // 1. Allow non-browser requests (mobile, health checks, etc.)
-      if (!origin || origin === "undefined" || origin === "null") {
-        return callback(null, true);
-      }
-      
+      if (!origin || origin === "undefined" || origin === "null") return callback(null, true);
       const sanitizedOrigin = origin.replace(/\/$/, "");
-
-      // 2. Check strict allowedOrigins list
-      if (allowedOrigins.includes(sanitizedOrigin)) {
+      if (allowedOrigins.includes(sanitizedOrigin) || sanitizedOrigin.endsWith(".vercel.app")) {
         return callback(null, true);
       }
-      
-      // 3. Allow all Vercel subdomains in production/dev
-      if (sanitizedOrigin.endsWith(".vercel.app")) {
-        return callback(null, true);
-      }
-      
-      // 4. Development localhost support
       if (env.NODE_ENV === "development" && sanitizedOrigin.includes("localhost")) {
         return callback(null, true);
       }
-      
-      logger.warn(`Blocked CORS request from origin: ${origin}`);
       return callback(null, false);
     },
     credentials: true,
@@ -100,6 +83,15 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
+// 3. Security & Optimization
+app.use(compression());
+app.use(helmet({
+  contentSecurityPolicy: env.NODE_ENV === "production" ? undefined : false,
+}));
+app.use(mongoSanitize());
+
+// Handlers removed from here (moved up)
 
 app.use(express.json({ 
   limit: "10mb",
@@ -124,7 +116,6 @@ app.use(rateLimit({
 }));
 
 // Sessions required for OAuth handshake
-app.set("trust proxy", 1);
 app.use(
   session({
     secret: env.JWT_SECRET,
@@ -211,7 +202,8 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET || !proce
   });
 }
 
-app.get("/health", (_req, res) => res.json({ ok: true, environment: env.NODE_ENV }));
+app.get("/", (_req, res) => res.status(200).json({ status: "healthy", timestamp: new Date() }));
+app.get("/health", (_req, res) => res.json({ ok: true, environment: env.NODE_ENV, db: mongoose.connection.readyState === 1 }));
 
 // Mounting routes with and without /api prefix for maximum compatibility
 const mountRoutes = (prefix = "") => {

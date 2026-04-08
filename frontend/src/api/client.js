@@ -100,13 +100,19 @@ api.interceptors.response.use(
     const data = error.response?.data;
     let message = (data && data.message) || error.message || "An unexpected error occurred.";
 
+    // Handle 521 (Service Unavailable / Down) specifically
+    if (status === 521) {
+      message = "The backend service is currently down or restarting. Please try again in 30 seconds.";
+    }
+
     // Handle specific network-level failures (DNS, no internet, CORS blocks)
-    if (!error.response) {
-      if (error.code === "ERR_NETWORK" || error.message === "Network Error") {
-        message = "Internet connection lost or server unreachable. Please check your network.";
-      } else if (error.code === "ECONNABORTED") {
-        message = "Request timed out. Please try again.";
+    if (!error.response || error.code === "ERR_NETWORK" || error.message === "Network Error") {
+      message = "Server unreachable. This might be a temporary deployment restart or a network issue.";
+      if (import.meta.env.MODE === "development") {
+        console.error("[Network Error Diagnostic]: Check if backend is running on port 8001");
       }
+    } else if (error.code === "ECONNABORTED") {
+      message = "Request timed out. The server is taking too long to respond.";
     }
 
     if (status === 401) {
