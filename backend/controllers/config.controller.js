@@ -7,8 +7,21 @@ const cloudinary = require("../config/cloudinary");
  * Public: Get configuration
  */
 exports.getConfig = asyncHandler(async (req, res) => {
-  const config = await Config.findOne().lean();
-  return ok(res, config || {}, "");
+  try {
+    const config = await Config.findOne().lean();
+    // Return an empty config object rather than null/undefined for frontend stability
+    return ok(res, config || { 
+      company_name: "Doller Coach", 
+      email: "", 
+      phone: "", 
+      gst: "", 
+      address: "", 
+      logo: "" 
+    }, "Config fetched successfully");
+  } catch (err) {
+    logger.error("Error fetching config:", err);
+    return fail(res, "Internal Server Error", 500);
+  }
 });
 
 /**

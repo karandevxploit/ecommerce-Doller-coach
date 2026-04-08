@@ -215,6 +215,7 @@ app.get("/health", (_req, res) => res.json({ ok: true, environment: env.NODE_ENV
 
 // Mounting routes with and without /api prefix for maximum compatibility
 const mountRoutes = (prefix = "") => {
+  // Core routes
   app.use(`${prefix}/auth`, authRoutes);
   app.use(`${prefix}/products`, productRoutes);
   app.use(`${prefix}/reviews`, reviewRoutes);
@@ -227,7 +228,13 @@ const mountRoutes = (prefix = "") => {
   app.use(`${prefix}/wishlist`, wishlistRoutes);
   app.use(`${prefix}/upload`, uploadRoutes);
   app.use(`${prefix}/coupons`, couponRoutes);
-  app.get(`${prefix}/config`, configController.getConfig);
+
+  // Global Configuration (Public)
+  if (configController && configController.getConfig) {
+    app.get(`${prefix}/config`, configController.getConfig);
+  } else {
+    logger.error(`[CRITICAL] configController.getConfig is undefined for prefix: ${prefix}`);
+  }
 };
 
 mountRoutes("/api");
