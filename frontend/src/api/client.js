@@ -2,16 +2,20 @@ import axios from "axios";
 import toast from "react-hot-toast";
 import { translateError } from "../utils/userFriendlyErrors";
 
-const apiURL = import.meta.env.VITE_API_URL || (import.meta.env.MODE === "development" ? "http://localhost:7000/api" : "");
+let rawURL = import.meta.env.VITE_API_URL;
 
-// Defensive: strip trailing slash and ensure /api prefix is present
-let baseURL = apiURL.replace(/\/$/, "");
-if (baseURL && !baseURL.endsWith("/api") && !baseURL.includes("/api/")) {
-  baseURL = `${baseURL}/api`;
+// Throw error if missing in production, fallback only in development
+if (!rawURL) {
+  if (import.meta.env.MODE === "production") {
+    throw new Error("[CRITICAL] VITE_API_URL is not defined in environment.");
+  }
+  rawURL = "http://localhost:7000/api";
 }
 
-if (!baseURL && import.meta.env.MODE === "production") {
-  console.error("[CRITICAL] VITE_API_URL is missing in production environment!");
+// Standardization Logic: remove trailing slash and ensure /api exists
+let baseURL = rawURL.replace(/\/$/, "");
+if (!baseURL.endsWith("/api")) {
+  baseURL += "/api";
 }
 
 const PUBLIC_PREFIXES = ["/config", "/products", "/reviews", "/auth", "/orders/check-review"];
