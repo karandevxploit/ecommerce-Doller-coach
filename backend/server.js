@@ -63,25 +63,31 @@ app.use(mongoSanitize());
 
 const allowedOrigins = (env.CLIENT_URL || "")
   .split(",")
-  .map((s) => s.trim())
+  .map((s) => s.trim().replace(/\/$/, "")) // Strip trailing slash
   .filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, health checks, or curl requests)
-      // Also handle cases where origin might be sent as the string "undefined" or "null"
+      // 1. Allow non-browser requests (mobile, health checks, etc.)
       if (!origin || origin === "undefined" || origin === "null") {
         return callback(null, true);
       }
       
-      // In production, enforce strictly. If origin exists and matches, allow it.
-      if (allowedOrigins.includes(origin)) {
+      const sanitizedOrigin = origin.replace(/\/$/, "");
+
+      // 2. Check strict allowedOrigins list
+      if (allowedOrigins.includes(sanitizedOrigin)) {
         return callback(null, true);
       }
       
-      // Also allow localhost in development
-      if (env.NODE_ENV === "development" && origin.includes("localhost")) {
+      // 3. Allow all Vercel subdomains in production/dev
+      if (sanitizedOrigin.endsWith(".vercel.app")) {
+        return callback(null, true);
+      }
+      
+      // 4. Development localhost support
+      if (env.NODE_ENV === "development" && sanitizedOrigin.includes("localhost")) {
         return callback(null, true);
       }
       
@@ -205,21 +211,28 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET || !proce
 }
 
 app.get("/health", (_req, res) => res.json({ ok: true, environment: env.NODE_ENV }));
-app.use("/api/auth", authRoutes);
-app.use("/api/products", productRoutes);
-app.use("/api/reviews", reviewRoutes);
-app.use("/api/cart", cartRoutes);
-app.use("/api/orders", orderRoutes);
-app.use("/api/payment", paymentRoutes);
-app.use("/api/offers", offerRoutes);
-app.use("/api/notifications", notificationRoutes);
-app.use("/api/admin", adminRoutes);
-app.use("/api/wishlist", wishlistRoutes);
-app.use("/api/upload", uploadRoutes);
-app.use("/api/coupons", couponRoutes);
 
-const configController = require("./controllers/config.controller");
-app.get("/api/config", configController.getConfig);
+// Mounting routes with and without /api prefix for maximum compatibility
+const mountRoutes = (prefix = "") => {
+  app.use(`${prefix}/auth`, authRoutes);
+  app.use(`${prefix}/products`, productRoutes);
+  app.use(`${prefix}/reviews`, reviewRoutes);
+  app.use(`${prefix}/cart`, cartRoutes);
+  app.use(`${prefix}/orders`, orderRoutes);
+  app.use(`${prefix}/payment`, paymentRoutes);
+  app.use(`${prefix}/offers`, offerRoutes);
+  app.use(`${prefix}/notifications`, notificationRoutes);
+  app.use(`${prefix}/admin`, adminRoutes);
+  app.use(`${prefix}/wishlist`, wishlistRoutes);
+  app.use(`${prefix}/upload`, uploadRoutes);
+  app.use(`${prefix}/coupons`, couponRoutes);
+  app.get(`${prefix}/config`, configController.getConfig);
+};
+
+mountRoutes("/api");
+if (env.NODE_ENV === "production") {
+  mountRoutes(""); // Fallback for root-level calls in production
+}
 
 app.use(notFound);
 app.use(errorHandler);
