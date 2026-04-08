@@ -2,6 +2,7 @@ const path = require("path");
 const dotenv = require("dotenv");
 dotenv.config({ path: path.join(__dirname, ".env") });
 const logger = require("./utils/logger");
+const env = require("./config/env");
 
 const express = require("express");
 const mongoose = require("mongoose");
@@ -61,7 +62,6 @@ process.on("unhandledRejection", (err) => {
 });
 
 const mongoSanitize = require("express-mongo-sanitize");
-const env = require("./config/env");
 
 const authRoutes = require("./routes/auth.routes");
 const productRoutes = require("./routes/product.routes");
