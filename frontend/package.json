@@ -27,7 +27,6 @@
     "react-router-dom": "^7.13.2",
     "recharts": "^3.8.1",
     "tailwind-merge": "^3.5.0",
-    "vite-plugin-pwa": "^1.2.0",
     "zustand": "^5.0.12"
   },
   "devDependencies": {
