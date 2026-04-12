@@ -2,22 +2,37 @@ const Config = require("../models/config.model");
 const asyncHandler = require("express-async-handler");
 const { ok, fail } = require("../utils/apiResponse");
 const cloudinary = require("../config/cloudinary");
+const redis = require("../config/redis");
+const logger = require("../utils/logger");
+
+const CACHE_KEY = "app:config";
 
 /**
- * Public: Get configuration
+ * Public: Get configuration (Cached)
  */
 exports.getConfig = asyncHandler(async (req, res) => {
   try {
+    // 1. Check Redis Cache
+    const cachedConfig = await redis.get(CACHE_KEY);
+    if (cachedConfig) {
+      return ok(res, JSON.parse(cachedConfig), "Config fetched from cache");
+    }
+
+    // 2. Fetch from DB
     const config = await Config.findOne().lean();
-    // Return an empty config object rather than null/undefined for frontend stability
-    return ok(res, config || { 
+    const result = config || { 
       company_name: "Doller Coach", 
       email: "", 
       phone: "", 
       gst: "", 
       address: "", 
       logo: "" 
-    }, "Config fetched successfully");
+    };
+
+    // 3. Populate Cache
+    await redis.setex(CACHE_KEY, 3600, JSON.stringify(result)); // 1 hour TTL
+
+    return ok(res, result, "Config fetched from DB");
   } catch (err) {
     logger.error("Error fetching config:", err);
     return fail(res, "Internal Server Error", 500);
@@ -40,6 +55,8 @@ exports.updateConfig = asyncHandler(async (req, res) => {
   if (address) config.address = address;
 
   await config.save();
+  await redis.del(CACHE_KEY); // Invalidate cache
+
   return ok(res, config, "Configuration updated");
 });
 
@@ -67,10 +84,12 @@ exports.uploadLogo = asyncHandler(async (req, res) => {
     
     config.logo = result.secure_url;
     await config.save();
+    
+    await redis.del(CACHE_KEY); // Invalidate cache
 
     return ok(res, { logo: config.logo }, "Logo updated successfully");
   } catch (err) {
-    console.error("Logo Upload Error:", err);
+    logger.error("Logo Upload Error:", err);
     return fail(res, err.message || "Failed to upload logo", 500);
   }
 });

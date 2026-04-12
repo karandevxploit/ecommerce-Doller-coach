@@ -5,6 +5,8 @@ import Layout from "./components/layout/Layout";
 import { useAuthStore, useCartStore, useWishlistStore } from "./store";
 import GlobalLoader from "./components/ui/GlobalLoader";
 import { useState } from "react";
+import ProtectedRoute from "./components/auth/ProtectedRoute";
+import ScrollToTop from "./components/utils/ScrollToTop";
 
 // Lazy Loaded User Pages
 const Home = lazy(() => import("./pages/Home"));
@@ -36,6 +38,7 @@ const OrderSuccess = lazy(() => import("./pages/OrderSuccess"));
 const Checkout = lazy(() => import("./pages/Checkout"));
 const AdminReviews = lazy(() => import("./admin/pages/Reviews"));
 const AdminSettings = lazy(() => import("./admin/pages/Settings"));
+const AdminPerformance = lazy(() => import("./admin/pages/Performance"));
 
 
 
@@ -49,14 +52,13 @@ function App() {
   useEffect(() => {
     const init = async () => {
       try {
-        const token = localStorage.getItem("token");
-        if (token) {
-          await fetchUser();
-        }
+        // We now always attempt to fetch the user. 
+        // The browser will send the HttpOnly session cookie if it exists.
+        await fetchUser();
       } catch (err) {
-        console.error("Initialization failed:", err);
+        // Ignored: guests will naturally fail here
       } finally {
-        setTimeout(() => setIsInitializing(false), 800); // Small delay for brand consistency
+        setTimeout(() => setIsInitializing(false), 800);
       }
     };
     init();
@@ -73,7 +75,8 @@ function App() {
     <GoogleOAuthProvider clientId="536224738397-ht6q3v710gdjb0a9ulr9okjsuv9sh7sg.apps.googleusercontent.com">
       <GlobalLoader isVisible={isInitializing} />
       <BrowserRouter>
-      <Suspense fallback={
+        <ScrollToTop />
+        <Suspense fallback={
         <div className="flex items-center justify-center min-h-[80vh] bg-white">
           <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#1e3a8a]"></div>
         </div>
@@ -88,13 +91,13 @@ function App() {
             <Route path="verify-reset-otp" element={<VerifyResetOtp />} />
             <Route path="reset-password" element={<ResetPassword />} />
             <Route path="cart" element={<Cart />} />
-            <Route path="checkout" element={<Checkout />} />
-            <Route path="profile" element={<Profile />} />
+            <Route path="checkout" element={<ProtectedRoute><Checkout /></ProtectedRoute>} />
+            <Route path="profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
             <Route path="wishlist" element={<Wishlist />} />
             <Route path="search" element={<Search />} />
             <Route path="collection" element={<Collection />} />
-            <Route path="my-orders" element={<MyOrders />} />
-            <Route path="order-success/:id" element={<OrderSuccess />} />
+            <Route path="my-orders" element={<ProtectedRoute><MyOrders /></ProtectedRoute>} />
+            <Route path="order-success/:id" element={<ProtectedRoute><OrderSuccess /></ProtectedRoute>} />
             <Route path="product/:id" element={<ProductPage />} />
           </Route>
 
@@ -111,6 +114,7 @@ function App() {
             <Route path="offers" element={<Offers />} />
             <Route path="reviews" element={<AdminReviews />} />
             <Route path="settings" element={<AdminSettings />} />
+            <Route path="performance" element={<AdminPerformance />} />
           </Route>
         </Routes>
       </Suspense>

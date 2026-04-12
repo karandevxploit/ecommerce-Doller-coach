@@ -1,180 +1,228 @@
-import { useState, useEffect, createElement } from "react";
+import { useState, useEffect, createElement, useCallback } from "react";
 import { api } from "../../api/client";
-import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { DollarSign, ShoppingBag, Users as UsersIcon, ArrowUpRight, ArrowDownRight, Activity } from "lucide-react";
-import toast from "react-hot-toast";
+import { DollarSign, ShoppingBag, Users as UsersIcon, RefreshCw, TrendingUp, BarChart3, Info, Lock, CheckCircle } from "lucide-react";
 import Button from "../../components/ui/Button";
+import { motion } from "framer-motion";
+import { RevenueLineChart, OrdersBarChart } from "../components/AnalyticsCharts";
 
 export default function Dashboard() {
-  const [stats, setStats] = useState(null);
+  const [data, setData] = useState({
+    metrics: { revenue: 0, orders: 0, customers: 0 },
+    revenueTrend: [],
+    ordersTrend: [],
+    recentTransactions: [],
+  });
   const [loading, setLoading] = useState(true);
+  const [errorStatus, setErrorStatus] = useState(null);
 
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const res = await api.get("/admin/stats");
-        setStats(res || null);
-      } catch (err) {
-        toast.error("Analytics fetch failed");
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchStats();
+  // Synchronized Analytics Fetcher: Single stable endpoint strategy
+  const refreshAnalytics = useCallback(async () => {
+    setLoading(true);
+    setErrorStatus(null);
+    try {
+      // Consolidating everything into /admin/stats ensures maximum reliability
+      // even if the specialized trend routes are blocked or pending server restart.
+      const res = await api.get("/admin/stats");
+
+      setData({
+        metrics: {
+          revenue: res?.totalRevenue || 0,
+          orders: res?.totalOrders || 0,
+          customers: res?.totalUsers || 0,
+        },
+        revenueTrend: res?.revenueTrend || [],
+        ordersTrend: res?.ordersTrend || [],
+        recentTransactions: res?.recentTransactions || [],
+      });
+    } catch (err) {
+      console.error("Dashboard Analytics Sync Error:", err);
+      setErrorStatus(err.response?.status || 500);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  if (loading || !stats) {
-    return (
-      <div className="space-y-6 animate-pulse">
-        <div className="h-8 w-1/4 bg-gray-200 rounded-md" />
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {[1,2,3].map((i) => <div key={i} className="h-32 bg-white rounded-xl border border-gray-100" />)}
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-           <div className="h-80 bg-white rounded-xl border border-gray-100" />
-           <div className="h-80 bg-white rounded-xl border border-gray-100" />
-        </div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    refreshAnalytics();
+  }, [refreshAnalytics]);
 
-  const StatCard = ({ title, value, icon: Icon, trend, isPositive }) => (
-    <div className="bg-white rounded-xl border border-[#e2e8f0] p-5 shadow-sm hover:shadow-md transition-shadow">
-      <div className="flex justify-between items-start">
-        <div className="space-y-3">
-          <p className="text-sm font-medium text-gray-500">{title}</p>
-          <p className="text-2xl font-semibold text-gray-900">{value}</p>
-          
-          <div className={`flex items-center gap-1 text-xs font-medium ${isPositive ? "text-emerald-600" : "text-rose-600"}`}>
-            {isPositive ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-            <span>{trend}</span>
-            <span className="text-gray-400 ml-1">vs last month</span>
-          </div>
-        </div>
-        <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-          {createElement(Icon, { size: 20 })}
-        </div>
+  const StatCard = ({ title, value, icon: Icon, color }) => (
+    <motion.div 
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="bg-white rounded-xl border border-slate-100 p-4 flex flex-1 items-center gap-3 transition-shadow hover:shadow-sm"
+    >
+      <div className={`w-9 h-9 rounded-lg ${color} flex items-center justify-center shrink-0 shadow-sm`}>
+        {createElement(Icon, { size: 18, className: "text-white" })}
       </div>
-    </div>
+      <div>
+        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{title}</p>
+        <h3 className="text-lg font-black text-slate-900 tracking-tighter">
+          {typeof value === "number" ? value.toLocaleString() : value}
+        </h3>
+      </div>
+    </motion.div>
   );
 
-  const handleDownloadReport = async () => {
-    try {
-      toast.loading("Generating report...", { id: "export" });
-      const response = await api.get("/admin/orders/export", { responseType: "blob" });
-      
-      const url = window.URL.createObjectURL(new Blob([response]));
-      const link = document.createElement("a");
-      link.href = url;
-      link.setAttribute("download", `orders_report_${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      
-      toast.success("Report downloaded", { id: "export" });
-    } catch (err) {
-      toast.error("Export failure", { id: "export" });
-    }
-  };
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-in fade-in duration-500 max-w-6xl mx-auto p-4">
       
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Overview</h1>
-          <p className="text-sm text-gray-500 mt-1">Here's what's happening with your store today.</p>
+      {/* Precision Header */}
+      <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+        <div className="flex items-center gap-3">
+          <div className="w-1.5 h-6 bg-blue-600 rounded-full" />
+          <div>
+            <h1 className="text-xl font-black text-slate-900 tracking-tight uppercase">Analytics <span className="text-blue-600">Overview</span></h1>
+            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest -mt-0.5">Commercial Performance Heartbeat</p>
+          </div>
         </div>
         
-        <div className="flex items-center gap-3">
-          <Button variant="outline" onClick={handleDownloadReport}>
-            Download Report
-          </Button>
-          <Button variant="primary">
-            <Activity size={16} /> Manage Analytics
-          </Button>
+        <div className="flex items-center gap-2">
+            {errorStatus === 401 && (
+                 <div className="flex items-center gap-1.5 px-2 py-1 bg-rose-50 border border-rose-100 rounded-lg mr-2">
+                    <Lock size={10} className="text-rose-600" />
+                    <span className="text-[9px] font-black text-rose-600 uppercase tracking-widest">Auth Required</span>
+                </div>
+            )}
+            <Button 
+                variant="outline" 
+                onClick={refreshAnalytics} 
+                disabled={loading}
+                className="h-8 rounded-lg px-4 border-slate-100 hover:bg-slate-50 text-[9px] font-black uppercase tracking-widest flex items-center gap-2"
+            >
+                <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+                {loading ? "Syncing..." : "Manual Sync"}
+            </Button>
         </div>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      {/* Top Level Metrics */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard 
           title="Total Revenue" 
-          value={`₹${Math.floor(stats?.totalRevenue || 0).toLocaleString()}`} 
+          value={`₹${data.metrics.revenue}`} 
           icon={DollarSign} 
-          trend="12.5%" 
-          isPositive={true} 
+          color="bg-blue-600"
         />
         <StatCard 
-          title="Active Orders" 
-          value={stats?.totalOrders || 0} 
+          title="Orders Count" 
+          value={data.metrics.orders} 
           icon={ShoppingBag} 
-          trend="8.2%" 
-          isPositive={true} 
+          color="bg-slate-900" 
         />
         <StatCard 
-          title="Total Customers" 
-          value={stats?.totalUsers || 0} 
+          title="Customer Base" 
+          value={data.metrics.customers} 
           icon={UsersIcon} 
-          trend="2.4%" 
-          isPositive={false} 
+          color="bg-emerald-600" 
         />
       </div>
 
-      {/* Charts Layer */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      {/* Unified Charts Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
-        {/* Revenue Area Chart */}
-        <div className="bg-white rounded-xl border border-[#e2e8f0] p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-base font-semibold text-gray-900">Revenue Performance</h2>
+        <div className="bg-white rounded-2xl border border-slate-100 p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+               <TrendingUp size={16} className="text-blue-600" />
+               <h2 className="text-[11px] font-black text-slate-900 uppercase tracking-widest">Revenue Velocity</h2>
+            </div>
+            <p className="text-[9px] font-bold text-rose-600 uppercase italic">Last 30 Days</p>
           </div>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={stats?.revenueData || []} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#2563eb" stopOpacity={0.1}/>
-                    <stop offset="95%" stopColor="#2563eb" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#6b7280" }} dy={10} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#6b7280" }} />
-                <Tooltip 
-                  contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} 
-                  itemStyle={{ color: '#0f172a', fontWeight: '600' }}
-                />
-                <Area type="monotone" dataKey="revenue" stroke="#2563eb" strokeWidth={2} fillOpacity={1} fill="url(#colorRev)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          {loading ? (
+             <div className="h-64 bg-slate-50 animate-pulse rounded-xl" />
+          ) : (
+            <RevenueLineChart data={data.revenueTrend} />
+          )}
         </div>
 
-        {/* Orders Bar Chart */}
-        <div className="bg-white rounded-xl border border-[#e2e8f0] p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-base font-semibold text-gray-900">Order Volume</h2>
+        <div className="bg-white rounded-2xl border border-slate-100 p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+               <BarChart3 size={16} className="text-slate-900" />
+               <h2 className="text-[11px] font-black text-slate-900 uppercase tracking-widest">Order Distribution</h2>
+            </div>
+            <p className="text-[9px] font-bold text-rose-600 uppercase italic">Last 30 Days</p>
           </div>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={stats?.orderData || []} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#6b7280" }} dy={10} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: "#6b7280" }} />
-                <Tooltip 
-                  cursor={{ fill: '#f8fafc' }}
-                  contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                  itemStyle={{ color: '#0f172a', fontWeight: '600' }}
-                />
-                <Bar dataKey="orders" fill="#0f172a" radius={[4, 4, 0, 0]} maxBarSize={40} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {loading ? (
+             <div className="h-64 bg-slate-50 animate-pulse rounded-xl" />
+          ) : (
+            <OrdersBarChart data={data.ordersTrend} />
+          )}
         </div>
-
       </div>
+
+      {/* NEW: TRANSACTION LEDGER FOR TRANSPARENCY */}
+      <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-sm">
+          <div className="p-6 border-b border-slate-50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                 <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center">
+                    <CheckCircle size={20} className="text-emerald-600" />
+                 </div>
+                 <div>
+                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-tight">Real-Time Transaction Ledger</h3>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Converting raw records to verified revenue</p>
+                 </div>
+              </div>
+              <div className="px-3 py-1 bg-emerald-500 text-white text-[9px] font-black uppercase tracking-widest rounded-full animate-pulse">
+                 Live Feed
+              </div>
+          </div>
+          <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                  <thead className="bg-slate-50/50">
+                      <tr>
+                          <th className="px-6 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest">Manifest ID</th>
+                          <th className="px-6 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest">Stakeholder</th>
+                          <th className="px-6 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest">Timestamp</th>
+                          <th className="px-6 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest">Valuation</th>
+                          <th className="px-6 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest">Fiscal Status</th>
+                      </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                      {data.recentTransactions?.length > 0 ? (
+                        data.recentTransactions.map((tx) => (
+                          <tr key={tx.id} className="hover:bg-slate-50/30 transition-colors">
+                              <td className="px-6 py-4 text-[11px] font-black text-slate-900 uppercase">#{tx.id.slice(-8)}</td>
+                              <td className="px-6 py-4 text-[11px] font-bold text-slate-600">{tx.customer}</td>
+                              <td className="px-6 py-4 text-[11px] text-slate-400">{new Date(tx.createdAt).toLocaleString()}</td>
+                              <td className="px-6 py-4 text-[11px] font-black text-slate-900">₹{tx.amount}</td>
+                              <td className="px-6 py-4">
+                                  <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${tx.status === 'PAID' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                                    {tx.status}
+                                  </span>
+                              </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={5} className="px-6 py-10 text-center text-slate-300 text-[10px] font-black uppercase tracking-widest">No Recent Logs Found</td>
+                        </tr>
+                      )}
+                  </tbody>
+              </table>
+          </div>
+      </div>
+
+      {/* Stability Footer */}
+      <div className="bg-slate-50 rounded-2xl p-4 flex items-center justify-between border border-slate-100">
+          <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center shadow-sm">
+                <Info size={14} className="text-blue-600" />
+              </div>
+              <p className="text-[10px] text-slate-500 font-medium">
+                <span className="font-black text-slate-900 uppercase tracking-tight mr-2">Sync Note:</span>
+                Dashboard tracking the last 30 days of commercial operations with zero filtering restrictions.
+              </p>
+          </div>
+          <button 
+            onClick={() => window.location.href = "/admin/performance"} 
+            className="text-[10px] font-black text-blue-600 hover:text-blue-500 uppercase tracking-widest transition-colors"
+          >
+            System Status &rarr;
+          </button>
+      </div>
+
     </div>
   );
 }

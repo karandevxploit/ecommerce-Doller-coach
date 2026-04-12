@@ -11,7 +11,9 @@ function ProductCard({ product }) {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
   const { addToCart } = useCartStore();
-  const { toggleWishlist, isInWishlist } = useWishlistStore();  const [showSizeSelector, setShowSizeSelector] = useState(false);
+  const { toggleWishlist, isInWishlist } = useWishlistStore(); 
+  const [showSizeSelector, setShowSizeSelector] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
   const isWishlisted = isInWishlist(product._id || product.id);
 
   const discount = Number(product?.discountPrice ? (1 - product.discountPrice / product.originalPrice) * 100 : product?.discount || 0);
@@ -20,7 +22,7 @@ function ProductCard({ product }) {
     e.preventDefault();
     e.stopPropagation();
     if (!product || product.stock <= 0) return toast.error("Stock Out of Stock.");
-    
+
     if (product.type === "FULL_OUTFIT") {
       setShowSizeSelector(true);
     } else {
@@ -52,7 +54,7 @@ function ProductCard({ product }) {
   };
 
   return (
-    <motion.div 
+    <motion.div
       whileHover={{ y: -8, transition: { duration: 0.4, ease: [0.22, 1, 0.36, 1] } }}
       className={`bg-white rounded-2xl shadow-sm overflow-hidden hover:shadow-2xl transition-all flex flex-col h-full relative group ${product.type === 'FULL_OUTFIT' ? 'ring-1 ring-indigo-50 border-indigo-100' : ''}`}
     >
@@ -72,34 +74,33 @@ function ProductCard({ product }) {
 
           {/* BADGES */}
           <div className="absolute top-2 left-2 z-20 flex flex-col gap-1.5">
-             {product.type === 'FULL_OUTFIT' && (
-               <motion.div 
-                 animate={{ opacity: [0.8, 1, 0.8], scale: [0.98, 1, 0.98] }}
-                 transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-                 className="bg-indigo-600 text-white px-2 py-1 rounded-md text-[8px] font-black uppercase tracking-widest flex items-center gap-1 shadow-lg"
-               >
-                 <Sparkles size={10} className="fill-white" /> Full Outfit
-               </motion.div>
-             )}
-             {discount > 0 && (
-               <motion.div 
-                 animate={{ y: [0, -2, 0] }}
-                 transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-                 className="bg-[#0f172a] text-white px-2 py-1 rounded-md text-[8px] font-black uppercase tracking-widest shadow-lg"
-               >
-                 {Math.round(discount)}% OFF
-               </motion.div>
-             )}
+            {product.type === 'FULL_OUTFIT' && (
+              <motion.div
+                animate={{ opacity: [0.8, 1, 0.8], scale: [0.98, 1, 0.98] }}
+                transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                className="bg-indigo-600 text-white px-2 py-1 rounded-md text-[8px] font-black uppercase tracking-widest flex items-center gap-1 shadow-lg"
+              >
+                <Sparkles size={10} className="fill-white" /> Full Outfit
+              </motion.div>
+            )}
+            {discount > 0 && (
+              <motion.div
+                animate={{ y: [0, -2, 0] }}
+                transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+                className="bg-[#0f172a] text-white px-2 py-1 rounded-md text-[8px] font-black uppercase tracking-widest shadow-lg"
+              >
+                {Math.round(discount)}% OFF
+              </motion.div>
+            )}
           </div>
 
           <button
             type="button"
             onClick={handleWishlist}
-            className={`absolute top-2 right-2 z-20 p-1.5 backdrop-blur-md rounded-full transition-all shadow-sm border ${
-              isWishlisted 
-                ? "bg-red-500 text-white border-red-500" 
+            className={`absolute top-2 right-2 z-20 p-1.5 backdrop-blur-md rounded-full transition-all shadow-sm border ${isWishlisted
+                ? "bg-red-500 text-white border-red-500"
                 : "bg-white/95 text-gray-400 border-gray-100 hover:text-red-500"
-            }`}
+              }`}
             aria-label="Add to wishlist"
           >
             <Heart size={16} fill={isWishlisted ? "currentColor" : "none"} strokeWidth={isWishlisted ? 0 : 2} />
@@ -121,10 +122,10 @@ function ProductCard({ product }) {
           {/* QUICK SIZE SELECTOR OVERLAY */}
           <AnimatePresence>
             {showSizeSelector && (
-              <QuickSizeSelector 
-                product={product} 
-                onSelect={handleQuickSelect} 
-                onClose={() => setShowSizeSelector(false)} 
+              <QuickSizeSelector
+                product={product}
+                onSelect={handleQuickSelect}
+                onClose={() => setShowSizeSelector(false)}
               />
             )}
           </AnimatePresence>
@@ -142,7 +143,7 @@ function ProductCard({ product }) {
               {product.title}
             </h3>
           </div>
-          
+
           <div className="flex items-center justify-between pt-2">
             <span className="text-base font-black text-gray-900 tracking-tighter">
               {formatPrice(product.price)}

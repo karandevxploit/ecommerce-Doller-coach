@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { LogOut, Menu, User, Bell, Search, Settings } from "lucide-react";
 import { api } from "../../api/client";
+import { useAuthStore } from "../../store";
 
 export default function Topbar({ onMenuClick }) {
-  const adminUser = JSON.parse(localStorage.getItem("adminUser") || "null");
+  const { user: adminUser, logout } = useAuthStore();
   const [notes, setNotes] = useState([]);
 
   useEffect(() => {
@@ -21,13 +22,12 @@ export default function Topbar({ onMenuClick }) {
     };
   }, []);
 
-  const logout = () => {
-    localStorage.removeItem("adminToken");
-    localStorage.removeItem("adminUser");
+  const unread = notes.filter((n) => !n.readAt).length;
+
+  const handleLogout = () => {
+    logout();
     window.location.href = "/admin/login";
   };
-
-  const unread = notes.filter((n) => !n.readAt).length;
 
   return (
     <header className="sticky top-0 z-[50] bg-white/80 backdrop-blur-md border-b border-[#e2e8f0]">
@@ -91,14 +91,14 @@ export default function Topbar({ onMenuClick }) {
 
             <button
               type="button"
-              onClick={logout}
+              onClick={handleLogout}
               className="flex items-center justify-center w-8 h-8 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-900 transition-colors"
             >
               {adminUser?.name?.[0]?.toUpperCase() || <User size={16} />}
             </button>
             <button
               type="button"
-              onClick={logout}
+              onClick={handleLogout}
               className="hidden sm:block p-2 text-gray-400 hover:text-red-600 transition-colors"
               title="Logout"
             >

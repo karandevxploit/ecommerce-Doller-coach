@@ -16,6 +16,7 @@ const envSchema = z.object({
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
   BREVO_API_KEY: z.string().min(1, "BREVO_API_KEY is required for emails"),
   MAIL_FROM: z.string().default("Doller Coach <dollercoach@gmail.com>"),
+  REDIS_URL: z.string().url("Valid REDIS_URL is required for caching and queues"),
 });
 
 const envVars = {
@@ -30,6 +31,7 @@ const envVars = {
   RAZORPAY_WEBHOOK_SECRET: process.env.RAZORPAY_WEBHOOK_SECRET,
   BREVO_API_KEY: process.env.BREVO_API_KEY,
   MAIL_FROM: process.env.MAIL_FROM,
+  REDIS_URL: process.env.REDIS_URL,
 };
 
 const result = envSchema.safeParse(envVars);

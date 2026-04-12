@@ -32,8 +32,10 @@ const isValidEmail = (email) => {
   return typeof email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 };
 
+const { emailQueue } = require("../services/queue.service");
+
 /**
- * CORE: Unified Send Email Function with "Nuclear" Logging
+ * CORE: Unified Send Email Function
  */
 const sendEmailCore = async ({ to, bcc, subject, html, attachments }) => {
   const recipient = Array.isArray(to) ? to[0] : to;
@@ -42,7 +44,6 @@ const sendEmailCore = async ({ to, bcc, subject, html, attachments }) => {
   try {
     logger.info(`[Brevo TRACE][${requestId}] START: Attempting to send "${subject}" to ${recipient}`);
 
-    // 1. Validation
     if (!recipient) throw new Error("Recipient email is missing");
     if (!isValidEmail(recipient)) throw new Error(`Invalid email format: ${recipient}`);
 
@@ -59,7 +60,6 @@ const sendEmailCore = async ({ to, bcc, subject, html, attachments }) => {
     sendSmtpEmail.subject = subject;
     sendSmtpEmail.htmlContent = html;
 
-    // Handle Attachments
     if (attachments && Array.isArray(attachments) && attachments.length) {
       sendSmtpEmail.attachment = attachments.map(att => ({
         content: Buffer.isBuffer(att.content) ? att.content.toString("base64") : att.content,
@@ -67,10 +67,7 @@ const sendEmailCore = async ({ to, bcc, subject, html, attachments }) => {
       }));
     }
 
-    logger.debug(`[Brevo TRACE][${requestId}] PAYLOAD: Sender=${sender.email}, To=${recipient}`);
-
     const result = await apiInstance.sendTransacEmail(sendSmtpEmail);
-    
     logger.info(`[Brevo SUCCESS][${requestId}] MessageID: ${result.messageId}`);
     return result;
   } catch (error) {
@@ -83,7 +80,29 @@ const sendEmailCore = async ({ to, bcc, subject, html, attachments }) => {
   }
 };
 
+/**
+ * PRODUCTION-GRADE: Queue Email for background processing
+ */
+const queueEmail = async (payload) => {
+  const job = await emailQueue.add("send-email", payload);
+  if (!job) {
+    // Fallback if queueing fails
+    return sendEmailCore(payload).catch(e => logger.error("Email Fallback Failed", { error: e.message }));
+  }
+  return true;
+};
+
+// Initialize Background Worker (For single-process development)
+if (process.env.START_EMAIL_WORKER === "true") {
+  emailQueue.process(sendEmailCore).catch(e => logger.error("Email Worker Crash", { error: e.message }));
+}
+
 const BRAND_COLOR = "#000000";
 const SECONDARY_COLOR = "#999999";
 
-exports.sendEmail = sendEmailCore;
+module.exports = {
+  sendEmail: queueEmail, // High-performance default
+  sendEmailImmediate: sendEmailCore, // For critical sync alerts
+  BRAND_COLOR,
+  SECONDARY_COLOR
+};

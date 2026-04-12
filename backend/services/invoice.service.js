@@ -152,14 +152,17 @@ async function buildPdfBuffer(order, customer) {
         y += 22;
       };
 
-      drawRow("Subtotal:", order.subtotalAmount || 0);
-      drawRow(`GST (${order.gstPercent || 18}%):`, order.gstAmount || 0);
-      drawRow("Shipping:", order.deliveryFee || 0);
+      const gstDisplay = Math.round((order.subtotal || 0) * 0.18);
+      const totalDisplay = (order.subtotal || 0) - (order.discount || 0) + gstDisplay;
+
+      drawRow("Subtotal:", order.subtotal || 0);
+      drawRow(`GST (18%):`, gstDisplay);
+      drawRow("Shipping:", 0); // Enforced FREE Everywhere
       
       y += 5;
       doc.moveTo(sX + 20, y).lineTo(545, y).strokeColor(BORDER_DARK).lineWidth(0.5).stroke();
       y += 12;
-      drawRow("Grand Total:", order.totalAmount || 0, true);
+      drawRow("Grand Total:", totalDisplay, true);
 
       // --- 6. PAYMENT & QR ---
       y += 30;

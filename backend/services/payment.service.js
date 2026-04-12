@@ -28,6 +28,15 @@ class PaymentService {
     }
   }
 
+  /**
+   * Constant-time comparison to prevent timing attacks
+   */
+  safeCompare(a, b) {
+    if (typeof a !== "string" || typeof b !== "string") return false;
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  }
+
   verifySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature) {
     const text = `${razorpayOrderId}|${razorpayPaymentId}`;
     const generatedSignature = crypto
@@ -35,7 +44,7 @@ class PaymentService {
       .update(text)
       .digest("hex");
 
-    return generatedSignature === razorpaySignature;
+    return this.safeCompare(generatedSignature, razorpaySignature);
   }
 
   verifyWebhookSignature(rawBody, signature) {
@@ -49,7 +58,7 @@ class PaymentService {
       .update(rawBody)
       .digest("hex");
 
-    return expectedSignature === signature;
+    return this.safeCompare(expectedSignature, signature);
   }
 
   async handleWebhook(event) {
@@ -65,9 +74,29 @@ class PaymentService {
       return;
     }
 
+    // 1. Idempotency Check: Prevent duplicate processing of the same payment ID
+    if (dbOrder.payment?.razorpayPaymentId === payment.id && dbOrder.paymentStatus === "PAID") {
+      logger.info(`Webhook Idempotency: Payment ${payment.id} already processed for Order ${dbOrder._id}`);
+      return;
+    }
+
     if (eventType === "payment.captured") {
-      if (dbOrder.paymentStatus === "PAID") return;
-      
+      // 2. CRITICAL SECURITY: Amount Verification
+      // Razorpay amount is in paise (totalAmount * 100)
+      const expectedAmount = Math.round(dbOrder.totalAmount * 100);
+      const paidAmount = payment.amount;
+
+      if (Math.abs(paidAmount - expectedAmount) > 0) {
+        logger.error(`FRAUD ATTEMPT: Amount mismatch for order ${dbOrder._id}. Expected ${expectedAmount}, Paid ${paidAmount}. IP: ${payment.ip}`);
+        
+        await orderRepository.updatePaymentInfo(dbOrder._id, {
+          paymentId: payment.id,
+          status: "FAILED",
+          signature: "FRAUD_ATTEMPT_AMOUNT_MISMATCH"
+        });
+        return;
+      }
+
       await orderRepository.updatePaymentInfo(dbOrder._id, {
         paymentId: payment.id,
         signature: "WEBHOOK_VERIFIED",
@@ -79,7 +108,7 @@ class PaymentService {
         await orderService.finalizeCouponUsage(dbOrder.couponCode);
       }
 
-      logger.info(`Payment CAPTURED for order ${dbOrder._id}`);
+      logger.info(`Payment CAPTURED and VERIFIED for order ${dbOrder._id}`);
     } else if (eventType === "payment.failed") {
       await orderRepository.updatePaymentInfo(dbOrder._id, {
         paymentId: payment.id,

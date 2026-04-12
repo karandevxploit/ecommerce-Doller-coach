@@ -107,10 +107,10 @@ export default function Wishlist() {
 
           /* MANIFEST GRID */
           <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-            {products.map((p) => (
+            {products.map((p, index) => (
               <motion.div 
                 layout
-                key={p.id} 
+                key={p.id ? `wish-${p.id}` : `wish-idx-${index}`} 
                 className="relative group transition-all"
               >
                 <ProductCard product={p} />

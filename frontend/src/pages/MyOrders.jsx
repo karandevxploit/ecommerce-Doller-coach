@@ -39,25 +39,25 @@ export default function MyOrders() {
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
+  const fetchOrders = async () => {
+    try {
+      const res = await api.get("/orders/my");
+      // Smart Extraction: Handle both direct array and object envelope structures
+      const list = Array.isArray(res) ? res : (res.data || []);
+      setOrders(list.map(mapOrder));
+    } catch (err) {
+      console.error("Orders Sync Error:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchOrders = async () => {
-      try {
-        const res = await api.get("/orders/my");
-        const list = res.data || [];
-        setOrders(Array.isArray(list) ? list.map(mapOrder) : []);
-      } catch (err) {
-        console.error("Orders Sync Error:", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchOrders();
-
-    // POLLING: Auto-sync every 10 seconds for status updates
-    const interval = setInterval(fetchOrders, 10000);
-    return () => clearInterval(interval);
   }, []);
+
+  // POLLING: Auto-sync every 10 seconds for status updates (Visibility-Aware)
+  useSafeInterval(fetchOrders, 10000);
 
   const containerVars = {
     hidden: { opacity: 0 },
@@ -166,7 +166,7 @@ export default function MyOrders() {
               <div className="mt-6 pt-6 border-t border-gray-50 flex justify-between items-center">
                 <div className="space-y-0.5">
                   <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest">Total Amount</p>
-                  <p className="text-lg font-black text-[#0f172a]">₹{order.totalAmount}</p>
+                  <p className="text-lg font-black text-[#0f172a]">₹{order.total || 0}</p>
                 </div>
                 <button 
                   onClick={() => navigate(`/product/${order.products?.[0]?.id || order.products?.[0]?._id}`)}

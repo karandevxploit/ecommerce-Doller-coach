@@ -40,7 +40,7 @@ export default function Orders() {
     // Optimistic UI Update
     const previousOrders = [...orders];
     setOrders((prev) =>
-      prev.map((o) => (o._id === id ? { ...o, status: status } : o))
+      prev.map((o) => (o.id === id ? { ...o, status: status } : o))
     );
 
     try {
@@ -110,30 +110,40 @@ export default function Orders() {
   };
 
   const handleUpdatePaymentStatus = async (id, status) => {
-    if (status !== "PAID") return; // We only handle marking as paid via this specific button
+    console.log(`[DEBUG] handleUpdatePaymentStatus triggered for order: ${id}`);
+    if (status !== "PAID") {
+      console.warn(`[DEBUG] Aborting: status ${status} is not 'PAID'`);
+      return;
+    }
     
-    // Optimistic UI Update
+    // Save state for rollback
     const previousOrders = [...orders];
-    setOrders(prev => prev.map(o => o.id === id ? { ...o, paymentStatus: "PAID" } : o));
-    if (selectedOrder?.id === id) setselectedOrder({ ...selectedOrder, paymentStatus: "PAID" });
+    const previousSelected = selectedOrder ? { ...selectedOrder } : null;
 
     try {
       setProcessingPayment(true);
-      toast.loading("Verifying Transaction...", { id: "payment" });
+      toast.loading("Verifying Purchase...", { id: "payment" });
       
-      const res = await api.patch(`/admin/orders/${id}/paid`);
+      // HIGH-RELIABILITY HAMMER ROUTE: Uses JSON body to bypass URL segment mapping issues
+      // This solves the 404 error seen in the /pay endpoint logs
+      const res = await api.put("/admin/pay", { orderId: id });
       
-      // Sync with server response
-      const updatedOrder = mapOrder(res.data || res);
+      // Sync with high-fidelity server response
+      const serverOrder = res.data || res;
+      const updatedOrder = mapOrder(serverOrder);
+
+      // Instant UI Update
       setOrders(prev => prev.map(o => o.id === id ? updatedOrder : o));
       if (selectedOrder?.id === id) setselectedOrder(updatedOrder);
       
-      toast.success("Payment Verified Instantly", { id: "payment" });
+      toast.success("Transaction Marked as PAID", { id: "payment" });
     } catch (err) {
-      console.error("PAYMENT VERIFICATION ERROR:", err);
-      toast.error(err.response?.data?.message || "Verification failed", { id: "payment" });
-      // Rollback on failure
+      console.error("PAYMENT SYNC FAILURE:", err);
+      toast.error(err.response?.data?.message || "Verify failure - Check Admin Auth", { id: "payment" });
+      
+      // Rollback to maintain integrity
       setOrders(previousOrders);
+      if (previousSelected) setselectedOrder(previousSelected);
     } finally {
       setProcessingPayment(false);
     }
@@ -150,7 +160,7 @@ export default function Orders() {
   };
 
   const filteredOrders = Array.isArray(orders) ? orders.filter(o => 
-    o._id?.toLowerCase().includes(search.toLowerCase()) || 
+    o.id?.toLowerCase().includes(search.toLowerCase()) || 
     o.user?.name?.toLowerCase().includes(search.toLowerCase()) ||
     o.products?.[0]?.title?.toLowerCase().includes(search.toLowerCase())
   ) : [];
@@ -281,7 +291,7 @@ export default function Orders() {
                               {order.paymentStatus || "PENDING"}
                             </span>
                             <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest italic leading-none truncate">
-                              ₹{order.totalAmount || 0}
+                              ₹{order.total || 0}
                             </span>
                           </div>
                         </td>
@@ -425,8 +435,8 @@ export default function Orders() {
                     </div>
                     <div className="p-3 rounded-xl border border-gray-100 flex-1">
                       <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Status</p>
-                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-md uppercase ${(selectedOrder.paymentStatus || "").toUpperCase() === "PAID" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                        {selectedOrder.paymentStatus || "PENDING"}
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-md uppercase ${selectedOrder.isPaid ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                        {selectedOrder.isPaid ? "PAID" : "PENDING"}
                       </span>
                     </div>
                   </div>
@@ -436,18 +446,18 @@ export default function Orders() {
                 <section className="p-6 bg-gray-900 rounded-2xl text-white shadow-xl">
                    <div className="flex justify-between items-center mb-2 opacity-60">
                       <span className="text-[10px] font-black uppercase tracking-widest">Order Valuation</span>
-                      <span className="text-sm font-bold">₹{selectedOrder.totalAmount}</span>
+                      <span className="text-sm font-bold">₹{selectedOrder.total || 0}</span>
                    </div>
                    <div className="flex justify-between items-center">
                       <span className="text-xs font-black uppercase tracking-widest">Grand Total</span>
-                      <span className="text-2xl font-black italic tracking-tighter">₹{selectedOrder.totalAmount}</span>
+                      <span className="text-2xl font-black italic tracking-tighter">₹{selectedOrder.total || 0}</span>
                    </div>
                 </section>
               </div>
 
               {/* ACTION FOOTER */}
               <div className="p-6 border-t bg-gray-50 space-y-3">
-                 { (selectedOrder.paymentStatus || "").toUpperCase() !== "PAID" && (
+                 { !selectedOrder.isPaid && (
                    <button 
                     disabled={processingPayment}
                     onClick={() => handleUpdatePaymentStatus(selectedOrder.id, "PAID")}

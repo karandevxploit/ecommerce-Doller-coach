@@ -3,8 +3,8 @@ class BaseRepository {
     this.model = model;
   }
 
-  async create(data) {
-    return await this.model.create(data);
+  async create(data, options = {}) {
+    return await this.model.create([data], options).then(res => res[0]);
   }
 
   async findById(id) {
@@ -20,8 +20,8 @@ class BaseRepository {
     return await this.model.find(query).sort(sort).limit(limit).skip(skip).populate(populate).lean();
   }
 
-  async updateById(id, data) {
-    return await this.model.findByIdAndUpdate(id, data, { new: true, runValidators: true });
+  async updateById(id, data, options = {}) {
+    return await this.model.findByIdAndUpdate(id, data, { new: true, runValidators: true, ...options });
   }
 
   async deleteById(id) {

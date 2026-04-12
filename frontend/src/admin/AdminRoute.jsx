@@ -2,19 +2,26 @@ import { Navigate } from "react-router-dom";
 import { ShieldAlert, ArrowLeft, Layout } from "lucide-react";
 import { useMemo } from "react";
 
-export default function AdminRoute({ children }) {
-  const token = localStorage.getItem("adminToken");
-  const adminUser = JSON.parse(localStorage.getItem("adminUser") || "null");
+import { useAuthStore } from "../store";
+import GlobalLoader from "../components/ui/GlobalLoader";
 
-  if (!token) {
-    return <Navigate to="/admin/login" replace />;
+export default function AdminRoute({ children }) {
+  const { isAuthenticated, isAdminAuthenticated, loading } = useAuthStore();
+  
+  // Rules of Hooks: Always declare hooks at the top level
+  const traceId = useMemo(() => Math.random().toString(36).slice(2, 10).toUpperCase(), []);
+
+  if (loading) {
+    return <GlobalLoader isVisible={true} />;
   }
 
-  if (adminUser && adminUser.role !== "admin" && adminUser.isAdmin !== true) {
+  if (!isAuthenticated || !isAdminAuthenticated) {
+    if (!isAuthenticated) return <Navigate to="/admin/login" replace />;
+
+    // Authenticated but not an admin
     return (
       <div className="min-h-screen flex items-center justify-center bg-white text-[#0f172a] px-6">
         <div className="max-w-[480px] w-full text-center space-y-12">
-
           <div className="flex justify-center">
              <div className="h-24 w-24 rounded-[2.5rem] bg-[#0f172a] text-red-500 flex items-center justify-center shadow-sm ">
                 <ShieldAlert size={48} strokeWidth={2.5} />
@@ -26,7 +33,7 @@ export default function AdminRoute({ children }) {
               Unauthorized Update
             </h1>
             <p className="text-[12px] font-black text-gray-400 uppercase tracking-[0.4em] px-8 leading-relaxed">
-              Your user iduser lacks the high-level clearance required to access this node.
+              Your session record lacks the high-level clearance required to access this node.
             </p>
           </div>
 
@@ -51,7 +58,7 @@ export default function AdminRoute({ children }) {
                 <div className="h-1.5 w-1.5 rounded-full bg-red-500" /> Security Locked
              </div>
              <div className="flex items-center gap-2 text-[9px] font-black text-gray-300 uppercase tracking-widest">
-                <div className="h-1.5 w-1.5 rounded-full bg-[#0f172a]" /> Trace ID: {useMemo(() => Math.random().toString(36).slice(2, 10).toUpperCase(), [])}
+                <div className="h-1.5 w-1.5 rounded-full bg-[#0f172a]" /> Trace ID: {traceId}
              </div>
           </div>
         </div>
@@ -60,4 +67,4 @@ export default function AdminRoute({ children }) {
   }
 
   return children;
-}
+}

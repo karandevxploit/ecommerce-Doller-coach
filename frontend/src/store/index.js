@@ -12,6 +12,7 @@ export const useAuthStore = create(
       isAuthenticated: false,
       isAdminAuthenticated: false,
       loading: false,
+      isFetchingUser: false, // Guard for concurrent calls
 
       login: async (payload, provider = "login") => {
         set({ loading: true });
@@ -20,22 +21,13 @@ export const useAuthStore = create(
           const endpoint = isContextAdmin ? `/auth/admin-login` : `/auth/${provider}`;
           
           const res = await api.post(endpoint, payload); 
-
-          const token = res.token || res.data?.token || res.accessToken || res.data?.accessToken;
           const userData = res.user || res.data?.user || (res.token ? res : res.data);
 
-          if (token && userData) {
+          if (userData) {
             const isAdmin = userData.role === "admin";
-            if (isAdmin) {
-              localStorage.setItem("adminToken", token);
-              localStorage.setItem("adminUser", JSON.stringify(userData));
-            } else {
-              localStorage.setItem("token", token);
-            }
-
             set({ 
               user: mapUser(userData), 
-              token, 
+              token: res.accessToken || res.data?.accessToken, // Persist token for header fallback
               isAuthenticated: true, 
               isAdminAuthenticated: isAdmin 
             });
@@ -51,21 +43,13 @@ export const useAuthStore = create(
       },
 
       setSession: (res) => {
-        const token = res.token || res.data?.token || res.accessToken || res.data?.accessToken;
         const userData = res.user || res.data?.user || (res.token ? res : res.data);
         
-        if (token && userData) {
+        if (userData) {
           const isAdmin = userData.role === "admin";
-          if (isAdmin) {
-            localStorage.setItem("adminToken", token);
-            localStorage.setItem("adminUser", JSON.stringify(userData));
-          } else {
-            localStorage.setItem("token", token);
-          }
-          
           set({ 
             user: mapUser(userData), 
-            token, 
+            token: res.accessToken || res.data?.accessToken || get().token,
             isAuthenticated: true, 
             isAdminAuthenticated: isAdmin 
           });
@@ -75,12 +59,9 @@ export const useAuthStore = create(
       },
 
       fetchUser: async () => {
-        const adminToken = localStorage.getItem("adminToken");
-        const userToken = localStorage.getItem("token");
-        
-        if (!adminToken && !userToken) return;
+        if (get().isFetchingUser) return;
+        set({ loading: true, isFetchingUser: true });
 
-        set({ loading: true });
         try {
           const res = await api.get("/auth/profile");
           const userData = res.user || res.data || res;
@@ -92,17 +73,17 @@ export const useAuthStore = create(
             isAdminAuthenticated: isAdmin 
           });
         } catch (err) {
-          get().logout();
+          // Failure on /profile means the user is a guest; set state silently.
+          set({ user: null, isAuthenticated: false, isAdminAuthenticated: false });
         } finally {
-          set({ loading: false });
+          set({ loading: false, isFetchingUser: false });
         }
       },
 
       logout: () => {
         localStorage.removeItem("auth-storage");
-        localStorage.removeItem("token");
-        localStorage.removeItem("adminToken");
         localStorage.removeItem("adminUser");
+        api.post("/auth/logout").catch(() => {}); // Trigger backend cookie clearing
         set({ 
           user: null, 
           token: null, 
@@ -171,8 +152,9 @@ export const useCartStore = create((set, get) => ({
     set({ isLoading: true });
     try {
       const res = await api.get("/cart");
-      const list = res.data?.items || res.data || [];
-      set({ items: Array.isArray(list) ? list.map(mapCartItem) : [] });
+      // Global interceptor already unwrapped .data, so we pull .items directly
+      const list = res?.items || (Array.isArray(res) ? res : []);
+      set({ items: list.map(mapCartItem) });
     } finally {
       set({ isLoading: false });
     }

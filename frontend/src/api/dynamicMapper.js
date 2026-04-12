@@ -31,26 +31,30 @@ export const mapProduct = (item) => {
 
 export const mapUser = (data) => {
   if (!data) return null;
+  // Handle case where userId is just an ID string, not populated
+  const isObj = typeof data === 'object';
   return {
-    id: data._id || data.id || "",
-    name: data.name || "User",
-    email: data.email || "",
-    role: data.role || "user",
-    isVerified: !!data.isVerified
+    id: isObj ? (data._id || data.id || "") : data,
+    name: isObj ? (data.name || "User") : "User",
+    email: isObj ? (data.email || "") : "",
+    role: isObj ? (data.role || "user") : "user",
+    isVerified: isObj ? !!data.isVerified : false
   };
 };
 
 export const mapCartItem = (item) => {
   if (!item) return null;
   
-  const productData = (item.productId && typeof item.productId === 'object') 
-    ? item.productId 
-    : (item.product && typeof item.product === 'object' ? item.product : item);
-
+  // Safe-guard: Extract product data while handling legacy/deleted references
+  const productSource = item.productId || item.product || {};
+  const isPopulated = typeof productSource === 'object' && productSource !== null;
+  
+  const productData = isPopulated ? productSource : item;
   const mappedProduct = mapProduct(productData);
   
   return {
     ...mappedProduct,
+    id: isPopulated ? (productSource._id || productSource.id) : (item.productId || mappedProduct.id),
     cartItemId: item._id || item.id || mappedProduct.id,
     quantity: item.quantity || 1,
     size: item.size || "",
@@ -62,17 +66,24 @@ export const mapCartItem = (item) => {
 export const mapOrder = (order) => {
   if (!order) return null;
   const shipping = order.shippingAddress || {};
+  const products = Array.isArray(order.products) 
+    ? order.products.map(mapCartItem).filter(Boolean) 
+    : [];
+  
   return {
     id: order._id || order.id || "",
+    _id: order._id || order.id || "", // Backward compatibility for legacy listeners
     invoiceNumber: order.invoiceNumber || "N/A",
-    totalAmount: order.totalAmount || 0,
+    subtotal: order.subtotal ?? order.subtotalAmount ?? 0,
+    discount: order.discount ?? order.discountAmount ?? 0,
+    delivery: order.delivery ?? order.deliveryFee ?? 0,
+    gst: order.gst ?? order.gstAmount ?? 0,
+    total: order.total ?? order.totalAmount ?? 0,
     status: order.status || "placed",
-    paymentStatus: order.paymentStatus || "PENDING",
     paymentMethod: order.paymentMethod || "COD",
+    paymentStatus: order.paymentStatus || (order.isPaid ? "PAID" : "PENDING"),
     createdAt: order.createdAt || new Date().toISOString(),
-    products: Array.isArray(order.products) 
-      ? order.products.map(mapCartItem) 
-      : [],
+    products,
     user: mapUser(order.userId),
     shippingAddress: {
       name: shipping.name || "N/A",

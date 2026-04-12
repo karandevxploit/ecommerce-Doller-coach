@@ -172,180 +172,115 @@ async function sendOrderPaidConfirmationWithAttachment({ order, customer, pdfBuf
   );
 }
 
-async function broadcastNewProductEmail({ product }) {
-  const users = await User.find({ role: "user", email: { $exists: true, $nin: [null, ""] } })
-    .select("email")
-    .lean();
-  const emails = users.map((u) => u.email).filter(Boolean);
-  if (!emails.length) return;
+const luxuryNewProductTemplate = ({ title, desc, price, imageUrl, productUrl }) => `
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #ffffff; padding: 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff;">
+          <tr>
+            <td style="padding: 60px 40px 40px; text-align: center;">
+              <h1 style="margin: 0; color: #000000; font-size: 22px; letter-spacing: 12px; text-transform: uppercase; font-weight: 900; line-height: 1;">DOLLER COACH</h1>
+              <div style="height: 1px; width: 40px; background-color: #000000; margin: 25px auto 0;"></div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 0 40px;">
+              <a href="${productUrl}"><img src="${imageUrl}" alt="${title}" width="520" style="width: 100%; max-width: 520px; display: block;" /></a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 40px 40px 60px;">
+              <p style="margin: 0 0 10px; color: #999999; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 4px; text-align: center;">New Arrival</p>
+              <h2 style="margin: 0 0 20px; color: #000000; font-size: 32px; font-weight: 900; text-align: center; line-height: 1.1;">${title.toUpperCase()}</h2>
+              <p style="margin: 0 0 30px; color: #666666; font-size: 15px; line-height: 1.8; text-align: center;">${desc}</p>
+              <table width="100%"><tr><td align="center">
+                <div style="margin-bottom: 35px;"><span style="color: #000000; font-size: 24px; font-weight: 900;">${price}</span></div>
+                <a href="${productUrl}" style="background-color: #000000; color: #ffffff; padding: 22px 50px; text-decoration: none; font-weight: 900; font-size: 13px; text-transform: uppercase; letter-spacing: 3px; display: inline-block;">SHOP THE COLLECTION</a>
+              </td></tr></table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+`;
 
+const luxuryOfferTemplate = ({ title, desc, clientUrl }) => `
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border: 1px solid #f0f0f0;">
+    <tr>
+      <td align="center" style="padding: 60px 40px 40px; text-align: center;">
+        <p style="margin: 0 0 10px; color: #999999; font-size: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: 4px;">Private Invitation</p>
+        <h1 style="margin: 0; color: #000000; font-size: 22px; letter-spacing: 12px; text-transform: uppercase; font-weight: 900;">DOLLER COACH</h1>
+        <div style="height: 1px; width: 40px; background-color: #000000; margin: 25px auto 0;"></div>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding: 40px; text-align: center; background-color: #000000;">
+        <h2 style="margin: 0 0 15px; color: #ffffff; font-size: 36px; font-weight: 900; line-height: 1;">${title.toUpperCase()}</h2>
+        <p style="margin: 0; color: rgba(255,255,255,0.7); font-size: 14px; letter-spacing: 2px; text-transform: uppercase;">Limited Time Privilege</p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding: 60px 50px; text-align: center;">
+        <p style="margin: 0 0 40px; color: #666666; font-size: 16px; line-height: 1.8;">${desc}</p>
+        <a href="${clientUrl}/collection" style="background-color: #000000; color: #ffffff; padding: 22px 50px; text-decoration: none; font-weight: 900; font-size: 13px; text-transform: uppercase; letter-spacing: 3px; display: inline-block;">CLAIM PRIVILEGE</a>
+      </td>
+    </tr>
+  </table>
+`;
+
+async function broadcastNewProductEmail({ product }) {
   const title = product.title || "Elite Arrival";
-  const desc = product.shortDescription || product.description || "A masterclass in precision and aesthetic dominance.";
-  const price = product.price ? `₹${Number(product.price).toLocaleString("en-IN")}` : "";
-  const imageUrl = product.image || product.images?.[0] || getFallback(product.category);
+  const desc = product.shortDescription || product.description || "Precision engineered aesthetic dominance.";
+  const price = product.price ? `\u20B9${Number(product.price).toLocaleString("en-IN")}` : "";
+  const imageUrl = product.image || (product.images && product.images[0]) || getFallback(product.category);
   const productUrl = `${process.env.CLIENT_URL || "http://localhost:5173"}/product/${product._id}`;
 
-  const luxuryHtml = `
-    <!DOCTYPE html>
-    <html>
-    <body style="margin: 0; padding: 0; background-color: #ffffff; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;-webkit-font-smoothing: antialiased;">
-      <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #ffffff; padding: 0;">
-        <tr>
-          <td align="center">
-            <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff;">
-              <!-- Header -->
-              <tr>
-                <td style="padding: 60px 40px 40px; text-align: center;">
-                  <h1 style="margin: 0; color: #000000; font-size: 22px; letter-spacing: 12px; text-transform: uppercase; font-weight: 900; line-height: 1;">DOLLER COACH</h1>
-                  <div style="height: 1px; width: 40px; background-color: #000000; margin: 25px auto 0;"></div>
-                </td>
-              </tr>
+  const luxuryHtml = `<!DOCTYPE html><html><body style="margin: 0; padding: 0; background-color: #ffffff; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
+    ${luxuryNewProductTemplate({ title, desc, price, imageUrl, productUrl })}
+  </body></html>`;
 
-              <!-- Hero Image -->
-              <tr>
-                <td style="padding: 0 40px;">
-                  <a href="${productUrl}" style="text-decoration: none;">
-                    <img src="${imageUrl}" alt="${title}" width="520" style="width: 100%; max-width: 520px; display: block; border: 1px solid #f0f0f0;" />
-                  </a>
-                </td>
-              </tr>
+  const chunkSize = 45;
+  const relay = process.env.EMAIL_USER || "noreply@dollercoach.com";
+  let chunk = [];
+  const cursor = User.find({ role: "user", email: { $exists: true, $nin: [null, ""] } }).select("email").cursor();
 
-              <!-- Product Info -->
-              <tr>
-                <td style="padding: 40px 40px 60px;">
-                  <p style="margin: 0 0 10px; color: #999999; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 4px; text-align: center;">New Arrival</p>
-                  <h2 style="margin: 0 0 20px; color: #000000; font-size: 32px; font-weight: 900; text-align: center; letter-spacing: -1px; line-height: 1.1;">${title.toUpperCase()}</h2>
-                  
-                  <div style="max-width: 440px; margin: 0 auto;">
-                    <p style="margin: 0 0 30px; color: #666666; font-size: 15px; line-height: 1.8; text-align: center; font-weight: 400;">
-                      ${desc}
-                    </p>
-                  </div>
-
-                  <table width="100%" cellpadding="0" cellspacing="0">
-                    <tr>
-                      <td align="center">
-                        <div style="margin-bottom: 35px;">
-                          <span style="color: #000000; font-size: 24px; font-weight: 900; letter-spacing: -0.5px;">${price}</span>
-                        </div>
-                        <a href="${productUrl}" style="background-color: #000000; color: #ffffff; padding: 22px 50px; text-decoration: none; font-weight: 900; font-size: 13px; text-transform: uppercase; letter-spacing: 3px; display: inline-block; transition: all 0.3s ease;">
-                          SHOP THE COLLECTION
-                        </a>
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-
-              <!-- Footer -->
-              <tr>
-                <td style="background-color: #000000; padding: 60px 40px; text-align: center;">
-                  <p style="margin: 0 0 20px; color: #ffffff; font-size: 10px; letter-spacing: 5px; text-transform: uppercase; font-weight: 900;">Precision. Power. Prestige.</p>
-                  <div style="height: 1px; width: 30px; background-color: rgba(255,255,255,0.2); margin: 0 auto 20px;"></div>
-                  <p style="margin: 0; color: #666666; font-size: 9px; letter-spacing: 1px; text-transform: uppercase;">© ${new Date().getFullYear()} DOLLER COACH GLOBAL. ALL RIGHTS RESERVED.</p>
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-  `;
-
-  const chunkSize = 40;
-  const relay = process.env.EMAIL_USER || emails[0];
-  for (let i = 0; i < emails.length; i += chunkSize) {
-    const chunk = emails.slice(i, i + chunkSize);
-    await safeSend(() =>
-      sendEmail({
-        to: relay,
-        bcc: chunk,
-        subject: `Elite Series: ${title.toUpperCase()} is Here`,
-        text: `DOLLER COACH | ${title}\n\n${desc}\n\nInvestment: ${price}\n\nShop Now: ${productUrl}`,
-        html: luxuryHtml,
-      })
-    );
+  for (let user = await cursor.next(); user != null; user = await cursor.next()) {
+    chunk.push(user.email);
+    if (chunk.length >= chunkSize) {
+      await sendBroadcastChunk(relay, chunk, `Elite Series: ${title.toUpperCase()} is Here`, luxuryHtml, `DOLLER COACH | ${title}\n\n${desc}\n\nInvestment: ${price}\n\nShop Now: ${productUrl}`);
+      chunk = [];
+    }
   }
+  if (chunk.length > 0) await sendBroadcastChunk(relay, chunk, `Elite Series: ${title.toUpperCase()} is Here`, luxuryHtml, `DOLLER COACH | ${title}\n\n${desc}\n\nInvestment: ${price}\n\nShop Now: ${productUrl}`);
 }
 
 async function broadcastOfferEmail({ offer }) {
-  const users = await User.find({ role: "user", email: { $exists: true, $nin: [null, ""] } })
-    .select("email")
-    .lean();
-  const emails = users.map((u) => u.email).filter(Boolean);
-  if (!emails.length) return;
-
   const title = offer.title || "Exclusive Elite Access";
   const desc = offer.description || "An invitation to experience the pinnacle of performance luxury.";
   const clientUrl = process.env.CLIENT_URL || "http://localhost:5173";
 
-  const luxuryOfferHtml = `
-    <!DOCTYPE html>
-    <html>
-    <body style="margin: 0; padding: 0; background-color: #ffffff; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;-webkit-font-smoothing: antialiased;">
-      <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #ffffff; padding: 0;">
-        <tr>
-          <td align="center">
-            <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border: 1px solid #f0f0f0;">
-              <!-- Header -->
-              <tr>
-                <td style="padding: 60px 40px 40px; text-align: center;">
-                  <p style="margin: 0 0 10px; color: #999999; font-size: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: 4px;">Private Invitation</p>
-                  <h1 style="margin: 0; color: #000000; font-size: 22px; letter-spacing: 12px; text-transform: uppercase; font-weight: 900; line-height: 1;">DOLLER COACH</h1>
-                  <div style="height: 1px; width: 40px; background-color: #000000; margin: 25px auto 0;"></div>
-                </td>
-              </tr>
+  const luxuryOfferHtml = `<!DOCTYPE html><html><body style="margin: 0; padding: 0; background-color: #ffffff; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
+    ${luxuryOfferTemplate({ title, desc, clientUrl })}
+  </body></html>`;
 
-              <!-- Offer Content -->
-              <tr>
-                <td style="padding: 40px; text-align: center; background-color: #000000;">
-                  <h2 style="margin: 0 0 15px; color: #ffffff; font-size: 36px; font-weight: 900; letter-spacing: -1px; line-height: 1;">${title.toUpperCase()}</h2>
-                  <p style="margin: 0; color: rgba(255,255,255,0.7); font-size: 14px; letter-spacing: 2px; text-transform: uppercase;">Limited Time Privilege</p>
-                </td>
-              </tr>
+  const chunkSize = 45;
+  const relay = process.env.EMAIL_USER || "noreply@dollercoach.com";
+  let chunk = [];
+  const cursor = User.find({ role: "user", email: { $exists: true, $nin: [null, ""] } }).select("email").cursor();
 
-              <tr>
-                <td style="padding: 60px 50px; text-align: center;">
-                  <p style="margin: 0 0 40px; color: #666666; font-size: 16px; line-height: 1.8; font-weight: 400;">
-                    ${desc}
-                  </p>
-                  
-                  <a href="${clientUrl}/collection" style="background-color: #000000; color: #ffffff; padding: 22px 50px; text-decoration: none; font-weight: 900; font-size: 13px; text-transform: uppercase; letter-spacing: 3px; display: inline-block;">
-                    CLAIM PRIVILEGE
-                  </a>
-                </td>
-              </tr>
-
-              <!-- Footer -->
-              <tr>
-                <td style="background-color: #f9f9f9; padding: 40px; text-align: center;">
-                   <p style="margin: 0 0 15px; color: #000000; font-size: 10px; letter-spacing: 4px; text-transform: uppercase; font-weight: 900;">Precision. Power. Prestige.</p>
-                  <p style="margin: 0; color: #999999; font-size: 9px; letter-spacing: 1px; text-transform: uppercase;">© ${new Date().getFullYear()} DOLLER COACH GLOBAL. ALL RIGHTS RESERVED.</p>
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-  `;
-
-  const chunkSize = 40;
-  const relay = process.env.EMAIL_USER || emails[0];
-  for (let i = 0; i < emails.length; i += chunkSize) {
-    const chunk = emails.slice(i, i + chunkSize);
-    await safeSend(() =>
-      sendEmail({
-        to: relay,
-        bcc: chunk,
-        subject: `Privilege Unlocked: ${title}`,
-        text: `DOLLER COACH | ${title}\n\n${desc}\n\nClaim Now: ${clientUrl}/collection`,
-        html: luxuryOfferHtml,
-      })
-    );
+  for (let user = await cursor.next(); user != null; user = await cursor.next()) {
+    chunk.push(user.email);
+    if (chunk.length >= chunkSize) {
+      await sendBroadcastChunk(relay, chunk, `Privilege Unlocked: ${title}`, luxuryOfferHtml, `DOLLER COACH | ${title}\n\n${desc}\n\nClaim Now: ${clientUrl}/collection`);
+      chunk = [];
+    }
   }
+  if (chunk.length > 0) await sendBroadcastChunk(relay, chunk, `Privilege Unlocked: ${title}`, luxuryOfferHtml, `DOLLER COACH | ${title}\n\n${desc}\n\nClaim Now: ${clientUrl}/collection`);
+}
+
+async function sendBroadcastChunk(relay, emails, subject, html, text) {
+  await safeSend(() => sendEmail({ to: relay, bcc: emails, subject, html, text }));
 }
 
 async function sendOrderStatusEmail({ order, customer }) {

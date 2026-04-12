@@ -11,6 +11,12 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const compression = require("compression");
+const cookieParser = require("cookie-parser");
+const http = require("http");
+const requestTracker = require("./middlewares/requestTracker");
+const performanceTracker = require("./middlewares/performance.middleware");
+const governor = require("./middlewares/governor.middleware");
+const realtimeService = require("./services/realtime.service");
 
 logger.info("--- SYSTEM STARTUP ---");
 logger.info(`PORT: ${process.env.PORT || 7000}`);
@@ -18,6 +24,11 @@ logger.info(`ADMIN_SECRET loaded: ${Boolean(process.env.ADMIN_SECRET)}`);
 logger.info("----------------------");
 
 const app = express();
+
+// 0. Failure & Loop Protection (Critical Edge Safeguard)
+app.use(governor);
+app.use(requestTracker);
+app.use(performanceTracker);
 
 // 1. Absolute CORS Priority (Nuclear Fix)
 const allowedOrigins = (env.CLIENT_URL || "")
@@ -50,14 +61,18 @@ app.use(
   })
 );
 process.on("uncaughtException", (err) => {
-  console.error("CRITICAL: Uncaught Exception! Shutting down...");
-  console.error(err.name, err.message, err.stack);
+  logger.error("CRITICAL: Uncaught Exception! Shutting down gracefully...", {
+    error: err.message,
+    stack: err.stack,
+  });
   process.exit(1);
 });
 
 process.on("unhandledRejection", (err) => {
-  console.error("CRITICAL: Unhandled Rejection! Shutting down...");
-  console.error(err);
+  logger.error("CRITICAL: Unhandled Rejection! Shutting down gracefully...", {
+    error: err.message,
+    stack: err.stack,
+  });
   process.exit(1);
 });
 
@@ -95,6 +110,7 @@ app.use(compression());
 app.use(helmet({
   contentSecurityPolicy: env.NODE_ENV === "production" ? undefined : false,
 }));
+app.use(cookieParser());
 app.use(mongoSanitize());
 
 // End of Nuclear CORS block
@@ -113,13 +129,33 @@ if (env.NODE_ENV === "development") {
   app.use(morgan("combined", { stream: { write: (message) => logger.info(message.trim()) } }));
 }
 
-app.use(rateLimit({ 
-  windowMs: 15 * 60 * 1000, 
-  limit: env.NODE_ENV === "production" ? 100 : 1000, // Strict production limit, loose dev limit
-  message: "Too many requests from this IP, please try again after 15 minutes",
+const redis = require("./config/redis");
+const { RedisStore } = require("rate-limit-redis");
+
+// 4. Global API Rate Limiting (Guard against client-side loops)
+const rateLimitOptions = {
+  windowMs: 60 * 1000, // 1 minute
+  limit: env.NODE_ENV === "production" ? 60 : 300, 
+  message: { success: false, message: "Request limit exceeded. Possible loop detected." },
   standardHeaders: true,
   legacyHeaders: false,
-}));
+};
+
+// High-Availability Store Selection
+if (redis && !redis.isMock) {
+  try {
+    rateLimitOptions.store = new RedisStore({
+      sendCommand: (...args) => redis.call(...args),
+    });
+    logger.info("RateLimiter: Using Distributed Redis Store.");
+  } catch (err) {
+    logger.warn("RateLimiter: Redis Store failed to initialize. Falling back to memory.", { error: err.message });
+  }
+} else {
+  logger.info("RateLimiter: Using local In-Memory Store (Mock Active).");
+}
+
+app.use("/api", rateLimit(rateLimitOptions));
 
 // Sessions required for OAuth handshake
 app.use(
@@ -236,16 +272,18 @@ const mountRoutes = (prefix = "") => {
 };
 
 mountRoutes("/api");
-if (env.NODE_ENV === "production") {
-  mountRoutes(""); // Fallback for root-level calls in production
-}
 
 app.use(notFound);
 app.use(errorHandler);
 
 if (require.main === module) {
+  const server = http.createServer(app);
+
+  // Initialize Real-Time Telemetry
+  realtimeService.initialize(server);
+
   // 1. Start listening IMMEDIATELY (Crucial for Render/Cloud ports)
-  const server = app.listen(env.PORT, "0.0.0.0", () => {
+  server.listen(env.PORT, "0.0.0.0", () => {
     logger.info(`[PRODUCTION] Server opened port ${env.PORT} on 0.0.0.0`);
     logger.info(`Mode: ${env.NODE_ENV}`);
   });
@@ -272,8 +310,28 @@ if (require.main === module) {
     }
   }).catch(err => {
     logger.error("CRITICAL: Database initialization failed", { error: err.message });
-    // In many prod envs, we don't kill the server here so it can still serve a 503/error page
   });
+
+  // 3. Graceful Shutdown
+  const gracefulShutdown = async (signal) => {
+    logger.info(`${signal} received. Starting graceful shutdown...`);
+    server.close(() => {
+      logger.info("HTTP server closed.");
+      mongoose.connection.close(false).then(() => {
+        logger.info("Database connection closed.");
+        process.exit(0);
+      });
+    });
+
+    // Force shutdown after 10s if graceful fails
+    setTimeout(() => {
+      logger.error("Could not close connections in time, forcefully shutting down");
+      process.exit(1);
+    }, 10000);
+  };
+
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 }
 
 module.exports = app;

@@ -5,12 +5,19 @@ const { fail } = require("../utils/apiResponse");
 
 exports.isAuthenticated = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    let token = req.cookies?.accessToken;
+
+    if (!token) {
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith("Bearer ")) {
+        token = authHeader.split(" ")[1];
+      }
+    }
+
+    if (!token) {
       return fail(res, "Authentication required", 401);
     }
 
-    const token = authHeader.split(" ")[1];
     const decoded = AuthService.verifyAccessToken(token);
 
     if (!decoded) {

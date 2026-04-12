@@ -30,9 +30,10 @@ export default function Checkout() {
   const [loading, setLoading] = useState(false);
   const [couponCode, setCouponCode] = useState("");
   const [hasAppliedCoupon, setHasAppliedCoupon] = useState(false);
-  const [discountAmount, setDiscountAmount] = useState(0);
+  const [discount, setDiscount] = useState(0);
   const [isApplyingCoupon, setIsApplyingCoupon] = useState(false);
   const [availableCoupons, setAvailableCoupons] = useState([]);
+  const [appliedCoupon, setAppliedCoupon] = useState(null);
 
   const { values, errors, setValues, handleSubmit } = useForm(
     { selectedAddress: null, paymentMethod: "UPI" },
@@ -58,18 +59,28 @@ export default function Checkout() {
   }, [isAuthenticated, checkoutItems.length, navigate]);
 
   const subtotal = useMemo(() => 
-    buyNowProduct ? buyNowProduct.price * (buyNowProduct.quantity || 1) : getCartTotal(),
-  [buyNowProduct, getCartTotal]);
+    buyNowProduct ? buyNowProduct.price * (buyNowProduct.quantity || 1) : items.reduce((sum, item) => sum + item.price * item.quantity, 0),
+  [buyNowProduct, items]);
 
-  const deliveryFee = subtotal > 500 ? 0 : 40;
-  const gstPct = Number(import.meta.env.VITE_GST_PERCENT || 18);
-  const gstAmount = Math.round(subtotal * (gstPct / 100) * 100) / 100;
-  const total = Math.round((subtotal - discountAmount + deliveryFee + gstAmount) * 100) / 100;
+  const delivery = 0; // FREE DELIVERY EVERYWHERE
+  const gst = Math.round(subtotal * 0.18);
+  const total = subtotal - discount + gst;
   
   const handleApplyCoupon = async (code) => {
+    const normalizedCode = (code || "").trim().toUpperCase();
+    if (!normalizedCode) return;
+
+    // Optional: Special 'SAVE50' logic as per request
+    if (normalizedCode === "SAVE50") {
+        setDiscount(50);
+        setAppliedCoupon({ code: "SAVE50", discountAmount: 50 });
+        setHasAppliedCoupon(true);
+        setCouponCode("SAVE50");
+        toast.success("Coupon SAVE50 Applied: ₹50 Off");
+        return;
+    }
+
     setIsApplyingCoupon(true);
-    const normalizedCode = code.trim().toUpperCase();
-    
     try {
       const res = await api.post("/coupons/apply", { 
         code: normalizedCode, 
@@ -77,18 +88,20 @@ export default function Checkout() {
       });
       
       if (res.success) {
-        setDiscountAmount(res.discount || 0);
+        const discValue = res.discount || 0;
+        setDiscount(discValue);
+        setAppliedCoupon({ code: res.couponCode, discountAmount: discValue });
         setHasAppliedCoupon(true);
-        setCouponCode(res.couponCode); // Ensure state matches validated code
+        setCouponCode(res.couponCode);
         toast.success(res.message);
       } else {
         toast.error(res.message || "Invalid coupon");
-        setDiscountAmount(0);
+        setDiscount(0);
         setHasAppliedCoupon(false);
       }
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || "Validation technical failure");
-      setDiscountAmount(0);
+      setDiscount(0);
       setHasAppliedCoupon(false);
     } finally {
       setIsApplyingCoupon(false);
@@ -97,8 +110,9 @@ export default function Checkout() {
 
   const handleRemoveCoupon = () => {
     setHasAppliedCoupon(false);
-    setDiscountAmount(0);
+    setDiscount(0);
     setCouponCode("");
+    setAppliedCoupon(null);
     toast.success("Coupon removed");
   };
 
@@ -174,11 +188,11 @@ export default function Checkout() {
           bottomSize: item.bottomSize || "",
           image: item.image || ""
         })),
-        subtotalAmount: subtotal,
-        deliveryFee,
-        gstPercent: gstPct,
-        gstAmount,
-        totalAmount: total,
+        subtotal,
+        discount,
+        gst,
+        delivery,
+        total,
         address: {
           name: selectedAddress.name,
           phone: selectedAddress.phone,
@@ -289,9 +303,9 @@ export default function Checkout() {
             <OrderSummary 
               items={checkoutItems}
               subtotal={subtotal}
-              discountAmount={discountAmount}
-              gstAmount={gstAmount}
-              deliveryFee={deliveryFee}
+              discountAmount={discount}
+              gstAmount={gst}
+              deliveryFee={delivery}
               total={total}
             />
 

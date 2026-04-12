@@ -7,49 +7,55 @@ function notFound(req, res) {
 }
 
 function errorHandler(err, req, res, _next) {
+  let status = err.statusCode || 500;
+  let message = err.message || "Internal Server Error";
+  let errorCode = err.errorCode || "INTERNAL_ERROR";
+  let errors = err.errors || undefined;
+
+  // 1. Classification & Normalization
   const isZod = err && (err.name === "ZodError" || err.constructor?.name === "ZodError");
   const isMongoose = err && (err.name === "ValidationError" || err.name === "CastError");
-  
-  let status = err?.statusCode || 500;
-  let message = err?.message || "Internal Server Error";
 
-  if (err?.code === 11000) {
-    status = 409;
-    message = "Duplicate value provided for a unique field (e.g., email or phone)";
-  } else if (isZod) {
+  if (isZod || err.errorCode === "VALIDATION_FAILED") {
     status = 400;
-    message = "Invalid request data";
-    // Optional: include zod issues in dev
-    if (env.NODE_ENV === "development") {
-      message = err.errors;
-    }
+    errorCode = "VALIDATION_FAILED";
+    message = "Validation failed for the requested resource.";
   } else if (isMongoose) {
     status = 400;
+    errorCode = "DATA_VALIDATION_ERROR";
     if (err.name === "ValidationError") {
       message = Object.values(err.errors).map(val => val.message).join(", ");
-    } else {
-      message = err.message || "Database validation failed";
     }
+  } else if (err.code === 11000) {
+    status = 409;
+    errorCode = "DUPLICATE_ENTRY";
+    message = "Data provided already exists.";
   }
 
+  // 2. Logging with Context
   const logMethod = status >= 500 ? "error" : "warn";
-  logger[logMethod](`${req.method} ${req.originalUrl} - ${status} - ${message}`, {
+  const requestId = req.requestId || "no-trace";
+
+  logger[logMethod](`${req.method} ${req.originalUrl} - [${requestId}] - ${status} - ${errorCode} - ${message}`, {
     stack: env.NODE_ENV === "development" ? err.stack : undefined,
-    body: req.body,
-    params: req.params,
-    query: req.query,
     user: req.user ? req.user._id : "anonymous",
+    isOperational: err.isOperational || false,
+    requestId,
   });
 
-  // Mask 500 errors in production
-  if (status === 500 && env.NODE_ENV === "production") {
-    message = "Something went wrong. Please try again later.";
+  // 3. Mask Internal Errors in Production
+  if (status === 500 && env.NODE_ENV === "production" && !err.isOperational) {
+    message = "A system error occurred. Our engineers are notified.";
+    errorCode = "INTERNAL_SERVER_ERROR";
   }
 
+  // 4. Response Delivery
   res.status(status).json({
     success: false,
-    message: message,
-    data: null,
+    message,
+    errorCode,
+    errors,
+    requestId: (env.NODE_ENV === "development" || status >= 500) ? requestId : undefined,
     stack: env.NODE_ENV === "development" ? err.stack : undefined,
   });
 }

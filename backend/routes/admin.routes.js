@@ -1,20 +1,28 @@
 const router = require("express").Router();
 const asyncHandler = require("express-async-handler");
 const { requireAdmin } = require("../middlewares/auth.middleware");
-const { stats, listUsers } = require("../controllers/admin.controller");
+const { stats, listUsers, getRevenue, getOrderStats, getCustomerStats, getRevenueTrend, getOrderTrend } = require("../controllers/admin.controller");
 const productController = require("../controllers/product.controller");
 const orderController = require("../controllers/order.controller");
 const offerController = require("../controllers/offer.controller");
 const notificationController = require("../controllers/notification.controller");
 const configController = require("../controllers/config.controller");
+const { getPerformanceMetrics } = require("../controllers/performance.controller");
 const { upload: multerMemory } = require("../middlewares/upload.middleware");
 
 // Auth + Authorization Middleware for all sub-routes
 router.use(requireAdmin);
 
 router.get("/stats", stats);
+router.get("/revenue", getRevenue);
+router.get("/revenue/trend", getRevenueTrend);
+router.get("/orders/stats", getOrderStats);
+router.get("/orders/trend", getOrderTrend);
+router.get("/customers/stats", getCustomerStats);
 router.get("/users", listUsers);
 router.get("/notifications", notificationController.adminFeed);
+router.get("/performance", getPerformanceMetrics);
+router.put("/pay", requireAdmin, require("../controllers/admin.controller").verifyPaymentExternal);
 
 // Unified Admin Product Management
 router.get("/products", productController.listProducts);
@@ -26,8 +34,7 @@ router.delete("/products/:id", productController.deleteProduct);
 router.get("/orders/export", orderController.exportOrders);
 router.get("/orders", orderController.getOrders);
 router.put("/orders/:id/status", requireAdmin, orderController.updateOrderStatus);
-router.put("/orders/:id/payment", requireAdmin, orderController.updatePaymentStatus);
-router.patch("/orders/:id/paid", requireAdmin, orderController.updatePaymentStatus);
+router.put("/orders/:id/pay", requireAdmin, orderController.updatePaymentStatus);
 
 // Unified Admin Offer Management
 router.get("/offers", offerController.listOffers);

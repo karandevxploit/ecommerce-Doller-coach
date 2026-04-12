@@ -1,6 +1,7 @@
 const PaymentService = require("../services/payment.service");
 const orderRepository = require("../repositories/order.repository");
 const { ok, fail } = require("../utils/apiResponse");
+const { trackSignatureFailure } = require("../middlewares/fraud.middleware");
 const asyncHandler = require("express-async-handler");
 const logger = require("../utils/logger");
 const env = require("../config/env");
@@ -43,13 +44,20 @@ exports.verifyPayment = asyncHandler(async (req, res) => {
   const order = await orderRepository.findById(orderId);
   if (!order) return fail(res, "Order not found", 404);
 
+  // CRITICAL SECURITY: Ownership Validation
+  if (req.user.role !== "admin" && String(order.userId) !== String(req.user._id)) {
+    logger.warn(`Unauthorized verification attempt: User ${req.user._id} on Order ${orderId}`);
+    return fail(res, "Forbidden: Order ownership mismatch", 403);
+  }
+
   if (order.paymentStatus === "PAID") {
     return ok(res, { verified: true, order }, "Payment already verified");
   }
 
   const isValid = PaymentService.verifySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
   if (!isValid) {
-    logger.warn(`Invalid payment signature attempt: ${orderId}`);
+    logger.error(`FRAUD ALERT: Invalid signature detected for Order ${orderId} by User ${req.user._id}`);
+    await trackSignatureFailure(req.user._id);
     return fail(res, "Invalid payment signature", 400);
   }
 

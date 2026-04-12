@@ -23,6 +23,7 @@ export default function Sidebar({ onNavigate }) {
     { name: "Customers", path: "/admin/users", icon: Users },
     { name: "Offers", path: "/admin/offers", icon: Tag },
     { name: "Reviews", path: "/admin/reviews", icon: MessageSquare },
+    { name: "System Health", path: "/admin/performance", icon: Zap },
   ];
 
   return (

@@ -10,7 +10,7 @@ class AuthService {
       type: "access"
     };
     return jwt.sign(payload, env.JWT_SECRET, { 
-      expiresIn: "7d",
+      expiresIn: "15m", // Reduced from 7d for security
       issuer: "ecommerce-backend",
     });
   }
@@ -20,7 +20,8 @@ class AuthService {
       id: user._id,
       type: "refresh"
     };
-    return jwt.sign(payload, env.REFRESH_TOKEN_SECRET || env.JWT_SECRET, { 
+    const secret = env.REFRESH_TOKEN_SECRET || env.JWT_SECRET;
+    return jwt.sign(payload, secret, { 
       expiresIn: "7d",
       issuer: "ecommerce-backend",
     });

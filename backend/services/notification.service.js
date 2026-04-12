@@ -57,7 +57,9 @@ exports.broadcastOffer = async ({ title, body }) => {
   }
 };
 
-exports.notifyAdmins = async ({ title, body, type = "system" }) => {
+const { notificationQueue } = require("./queue.service");
+
+exports.notifyAdminsImmediate = async ({ title, body, type = "system" }) => {
   await Notification.create({
     userId: null,
     audience: "admin",
@@ -65,4 +67,8 @@ exports.notifyAdmins = async ({ title, body, type = "system" }) => {
     body,
     type,
   });
+};
+
+exports.notifyAdmins = async ({ title, body, type = "system" }) => {
+  await notificationQueue.add("admin-notify", { title, body, type });
 };

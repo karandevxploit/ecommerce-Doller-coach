@@ -1,5 +1,5 @@
 const router = require("express").Router();
-const { protect, authorize, requireAdmin } = require("../middlewares/auth.middleware");
+const { protect, authorize, requireAdmin, isAdmin } = require("../middlewares/auth.middleware");
 const {
   createOrder,
   getOrders,
@@ -12,7 +12,7 @@ const {
 router.post("/", protect, createOrder);
 router.get("/my", protect, getMyOrders);
 router.post("/checkout", protect, createOrder);
-router.get("/", protect, getOrders);
+router.get("/", protect, isAdmin, getOrders);
 router.get("/check-review/:productId", protect, canUserReview);
 router.get("/:id/invoice", protect, downloadInvoice);
 router.get("/:id/download-invoice", protect, downloadInvoice);

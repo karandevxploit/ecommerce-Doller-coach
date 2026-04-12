@@ -87,16 +87,15 @@ export default function Profile() {
       try {
         const [addr, ordRes] = await Promise.all([
           api.get("/auth/addresses"),
-          api.get("/orders"),
+          api.get("/orders/my"),
         ]);
-        setAddresses(Array.isArray(addr) ? addr : []);
-        // Resolve path conflict: if backend returns { success, orders }, extract orders
-        const rawOrders = ordRes?.orders || ordRes;
-        const ordersData = Array.isArray(rawOrders) ? rawOrders.map(mapOrder) : [];
-        setOrders(ordersData);
+        setAddresses(Array.isArray(addr) ? addr : (addr?.data || []));
+        
+        // Final Path Conflict Resolution: Use standard .data envelope
+        const ordersData = ordRes?.data || ordRes?.orders || (Array.isArray(ordRes) ? ordRes : []);
+        setOrders(Array.isArray(ordersData) ? ordersData.map(mapOrder) : []);
       } catch (err) {
-        console.error("Orders sync failed:", err.message);
-        toast.error("Error loading: Account Logs");
+        console.error("Profile sync failure:", err.message);
         setOrders([]);
       } finally {
         setLoading(false);

@@ -1,11 +1,12 @@
 import { create } from "zustand";
 import { api } from "../api/client";
 
-export const useConfigStore = create((set) => ({
+export const useConfigStore = create((set, get) => ({
   config: null,
   loading: false,
 
   fetchConfig: async () => {
+    if (get().loading || get().config) return;
     set({ loading: true });
     try {
       const data = await api.get("/config");

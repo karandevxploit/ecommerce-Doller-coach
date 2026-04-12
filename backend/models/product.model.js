@@ -72,12 +72,18 @@ productSchema.virtual("name").get(function () {
 });
 productSchema.set("toJSON", { virtuals: true });
 productSchema.set("toObject", { virtuals: true });
-productSchema.index({ createdAt: -1 });
-productSchema.index({ category: 1, type: 1 });
-productSchema.index({ featured: 1, trending: 1 });
+
+// Advanced Production Indexing
+productSchema.index({ createdAt: -1, _id: 1 }); // Optimized for sorted listings
+productSchema.index({ category: 1, price: 1 }); // Compound: Filtering + Sorting
+productSchema.index({ featured: 1 }, { partialFilterExpression: { featured: true } }); // Small Partial Index
+productSchema.index({ trending: 1 }, { partialFilterExpression: { trending: true } }); // Small Partial Index
 productSchema.index({ subcategory: 1 });
 productSchema.index({ productType: 1 });
-productSchema.index({ title: "text", description: "text" });
+productSchema.index({ title: "text", description: "text" }); // Full-Text Search
+
+const mongoosePaginate = require("mongoose-paginate-v2");
+productSchema.plugin(mongoosePaginate);
 
 module.exports = mongoose.models.Product || mongoose.model("Product", productSchema);
 

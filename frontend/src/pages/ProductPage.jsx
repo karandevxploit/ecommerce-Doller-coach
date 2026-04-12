@@ -10,6 +10,7 @@ import { formatPrice } from "../utils/format";
 import ProductCard from "../components/ProductCard";
 import FloatingVideo from "../components/FloatingVideo";
 import { mapProduct, mapReview } from "../api/dynamicMapper";
+import SEO from "../components/SEO";
 
 export default function ProductPage() {
   const { id } = useParams();
@@ -25,11 +26,13 @@ export default function ProductPage() {
   const [selectedSize, setSelectedSize] = useState(null);
   const [selectedTopSize, setSelectedTopSize] = useState(null);
   const [selectedBottomSize, setSelectedBottomSize] = useState(null);
-  const [reviews, setReviews] = useState([]);  const [reviewForm, setReviewForm] = useState({ rating: 5, comment: "" });
+  const [reviewForm, setReviewForm] = useState({ rating: 5, comment: "" });
   const [submittingReview, setSubmittingReview] = useState(false);
+  const [canReview, setCanReview] = useState(false);
   const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [related, setRelated] = useState([]);
   const [loadingRelated, setLoadingRelated] = useState(false);
+  const [reviews, setReviews] = useState([]);
   useEffect(() => {
     const load = async () => {
       try {
@@ -43,7 +46,7 @@ export default function ProductPage() {
         const mapped = mapProduct(res?.data || res);
         setProduct(mapped);
         setActiveImage(mapped?.image);
-        
+
         if (mapped.type === "FULL_OUTFIT") {
           if (mapped.topSizes?.length > 0) setSelectedTopSize(mapped.topSizes[0]);
           if (mapped.bottomSizes?.length > 0) setSelectedBottomSize(mapped.bottomSizes[0]);
@@ -102,12 +105,12 @@ export default function ProductPage() {
   const handleShare = async () => {
     const url = window.location.href;
     if (navigator.share) {
-      try { 
+      try {
         await navigator.share({
           title: product.title,
           text: product.description,
           url,
-        }); 
+        });
       } catch (err) {
         if (err.name !== "AbortError") toast.error("Share failed");
       }
@@ -119,7 +122,7 @@ export default function ProductPage() {
 
   const onAddToCart = () => {
     if (!product || product.stock <= 0) return toast.error("Product Out of Stock");
-    
+
     if (product.type === "FULL_OUTFIT") {
       if (!selectedTopSize || !selectedBottomSize) return toast.error("Please select both Top and Bottom sizes");
       addToCart(product._id || product.id, 1, null, selectedTopSize, selectedBottomSize);
@@ -133,7 +136,7 @@ export default function ProductPage() {
   const onBuyNow = () => {
     if (!isAuthenticated) return navigate("/login");
     if (!product || product.stock <= 0) return toast.error("Product Out of Stock");
-    
+
     let buyNowPayload = { ...product, quantity: 1 };
     if (product.type === "FULL_OUTFIT") {
       if (!selectedTopSize || !selectedBottomSize) return toast.error("Please select both Top and Bottom sizes");
@@ -142,7 +145,7 @@ export default function ProductPage() {
       if (product.sizes?.length > 0 && !selectedSize) return toast.error("Please select a size");
       buyNowPayload = { ...buyNowPayload, size: selectedSize };
     }
-    
+
     navigate("/checkout", { state: { buyNowProduct: buyNowPayload } });
   };
 
@@ -151,13 +154,13 @@ export default function ProductPage() {
     if (!isAuthenticated) return navigate("/login");
     if (!reviewForm.comment.trim()) return toast.error("Review comment required");
     if (!reviewForm.rating) return toast.error("Rating required");
-    
+
     setSubmittingReview(true);
     try {
-      await api.post("/reviews", { 
-        productId: id, 
-        rating: reviewForm.rating, 
-        comment: reviewForm.comment.trim() 
+      await api.post("/reviews", {
+        productId: id,
+        rating: reviewForm.rating,
+        comment: reviewForm.comment.trim()
       });
       toast.success("Review submitted successfully");
       setReviewForm({ rating: 5, comment: "" });
@@ -201,8 +204,15 @@ export default function ProductPage() {
 
   return (
     <div className="bg-white min-h-screen">
+      <SEO 
+        title={product.title}
+        description={product.description}
+        image={activeImage}
+        price={product.price}
+        type="product"
+      />
       <div className="max-w-6xl mx-auto px-4 py-8">
-        
+
         <button
           onClick={() => navigate(-1)}
           className="mb-8 flex items-center gap-2 text-sm font-medium text-gray-400 hover:text-gray-900 transition-colors group"
@@ -212,7 +222,7 @@ export default function ProductPage() {
         </button>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-          
+
           <div className="w-full">
             <div className="space-y-4">
               <img
@@ -223,7 +233,7 @@ export default function ProductPage() {
               {product.images?.length > 1 && (
                 <div className="flex gap-2 flex-wrap">
                   {product.images.map((img, i) => (
-                    <button 
+                    <button
                       key={i}
                       onClick={() => setActiveImage(img)}
                       className={`h-16 w-14 rounded-lg overflow-hidden border-2 transition-all ${activeImage === img ? "border-indigo-600" : "border-gray-100 opacity-60"}`}
@@ -242,7 +252,7 @@ export default function ProductPage() {
                 <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">
                   {product.category || "Apparel"}
                 </span>
-                <button 
+                <button
                   onClick={handleShare}
                   className="p-2 rounded-full border border-gray-100 text-gray-400 hover:text-indigo-600 hover:border-indigo-100 hover:bg-indigo-50 transition-all shadow-sm"
                   title="Share"
@@ -261,7 +271,7 @@ export default function ProductPage() {
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
                 <div className="flex gap-0.5 text-yellow-400">
-                  {[1,2,3,4,5].map((s) => (
+                  {[1, 2, 3, 4, 5].map((s) => (
                     <Star key={s} size={14} fill={(product.rating || 0) >= s ? "currentColor" : "none"} strokeWidth={2} className={(product.rating || 0) >= s ? "text-yellow-400" : "text-gray-200"} />
                   ))}
                 </div>
@@ -269,8 +279,8 @@ export default function ProductPage() {
                   ({product.rating?.toFixed(1) || "0.0"})
                 </span>
               </div>
-              
-              <button 
+
+              <button
                 onClick={() => setIsReviewOpen(true)}
                 className="text-[10px] font-black uppercase tracking-[0.1em] text-indigo-600 hover:text-indigo-700 underline underline-offset-4"
               >
@@ -301,10 +311,10 @@ export default function ProductPage() {
                             disabled={!isAvailable}
                             onClick={() => setSelectedTopSize(size)}
                             className={`h-11 min-w-[3rem] px-4 rounded-xl border text-[11px] font-black tracking-widest transition-all
-                              ${!isAvailable 
-                                ? "opacity-20 cursor-not-allowed bg-gray-50 border-gray-100 text-gray-400" 
-                                : isSelected 
-                                  ? "bg-[#0f172a] border-[#0f172a] text-white shadow-xl scale-105" 
+                              ${!isAvailable
+                                ? "opacity-20 cursor-not-allowed bg-gray-50 border-gray-100 text-gray-400"
+                                : isSelected
+                                  ? "bg-[#0f172a] border-[#0f172a] text-white shadow-xl scale-105"
                                   : "bg-white border-gray-100 text-[#0f172a] hover:border-[#1e3a8a] active:scale-95"
                               }`}
                           >
@@ -331,10 +341,10 @@ export default function ProductPage() {
                             disabled={!isAvailable}
                             onClick={() => setSelectedBottomSize(size)}
                             className={`h-11 min-w-[3rem] px-4 rounded-xl border text-[11px] font-black tracking-widest transition-all
-                              ${!isAvailable 
-                                ? "opacity-20 cursor-not-allowed bg-gray-50 border-gray-100 text-gray-400" 
-                                : isSelected 
-                                  ? "bg-[#0f172a] border-[#0f172a] text-white shadow-xl scale-105" 
+                              ${!isAvailable
+                                ? "opacity-20 cursor-not-allowed bg-gray-50 border-gray-100 text-gray-400"
+                                : isSelected
+                                  ? "bg-[#0f172a] border-[#0f172a] text-white shadow-xl scale-105"
                                   : "bg-white border-gray-100 text-[#0f172a] hover:border-[#1e3a8a] active:scale-95"
                               }`}
                           >
@@ -354,8 +364,8 @@ export default function ProductPage() {
                     </span>
                   </div>
                   <div className="flex gap-2 flex-wrap">
-                    {(product.type === "BOTTOMWEAR" 
-                      ? ["28", "30", "32", "34", "36", "38"] 
+                    {(product.type === "BOTTOMWEAR"
+                      ? ["28", "30", "32", "34", "36", "38"]
                       : ["S", "M", "L", "XL", "XXL"]
                     ).map(size => {
                       const isAvailable = product.sizes?.includes(size);
@@ -366,10 +376,10 @@ export default function ProductPage() {
                           disabled={!isAvailable}
                           onClick={() => setSelectedSize(size)}
                           className={`h-12 min-w-[3rem] px-4 rounded-xl border text-[11px] font-black tracking-widest transition-all
-                            ${!isAvailable 
-                              ? "opacity-20 cursor-not-allowed bg-gray-50 border-gray-100 text-gray-400" 
-                              : isSelected 
-                                ? "bg-[#0f172a] border-[#0f172a] text-white shadow-xl scale-105" 
+                            ${!isAvailable
+                              ? "opacity-20 cursor-not-allowed bg-gray-50 border-gray-100 text-gray-400"
+                              : isSelected
+                                ? "bg-[#0f172a] border-[#0f172a] text-white shadow-xl scale-105"
                                 : "bg-white border-gray-100 text-[#0f172a] hover:border-[#0f172a] hover:bg-gray-50 active:scale-95"
                             }`}
                         >
@@ -389,7 +399,7 @@ export default function ProductPage() {
               >
                 BUY NOW <Zap size={16} />
               </button>
-              
+
               <div className="flex gap-2">
                 <button
                   onClick={onAddToCart}
@@ -417,7 +427,7 @@ export default function ProductPage() {
                       <div className="flex justify-between items-center mb-1">
                         <span className="text-sm font-bold text-gray-900">{rev.user}</span>
                         <div className="flex gap-0.5 text-xs text-yellow-400">
-                          {[1,2,3,4,5].map((s) => (
+                          {[1, 2, 3, 4, 5].map((s) => (
                             <Star key={s} size={12} fill={rev.rating >= s ? "currentColor" : "none"} className={rev.rating >= s ? "" : "text-gray-200"} strokeWidth={2} />
                           ))}
                         </div>
@@ -499,7 +509,7 @@ export default function ProductPage() {
           <h2 className="text-lg font-bold text-gray-900 mb-6">You may also like</h2>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
             {loadingRelated ? (
-              [1,2,3,4].map((s) => (
+              [1, 2, 3, 4].map((s) => (
                 <div key={s} className="aspect-[3/4] bg-gray-50 rounded-xl animate-pulse" />
               ))
             ) : (

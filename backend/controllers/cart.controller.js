@@ -18,7 +18,7 @@ exports.getCart = asyncHandler(async (req, res) => {
 });
 
 exports.addToCart = asyncHandler(async (req, res) => {
-  const { productId, size } = req.body || {};
+  const { productId, size, topSize, bottomSize } = req.body || {};
   const quantity = parsePositiveInt(req.body?.quantity, 1);
   if (!productId || !mongoose.isValidObjectId(productId)) {
     return fail(res, "Invalid productId", 400);
@@ -26,22 +26,33 @@ exports.addToCart = asyncHandler(async (req, res) => {
 
   const product = await Product.findById(productId).select("stock").lean();
   if (!product) return fail(res, "Product not found", 404);
-  if ((product.stock ?? 0) < 1) return fail(res, "Out of stock", 400);
+  const stock = product.stock ?? 0;
+  if (stock < 1) return fail(res, "Out of stock", 400);
 
   let cart = await Cart.findOne({ userId: req.user._id });
   if (!cart) cart = await Cart.create({ userId: req.user._id, items: [] });
-  const idx = cart.items.findIndex((it) => String(it.productId) === String(productId) && it.size === (size || ""));
+  
+  // Unique identification of a cart item: ID + Size + TopSize + BottomSize
+  const idx = cart.items.findIndex((it) => 
+    String(it.productId) === String(productId) && 
+    (it.size || "") === (size || "") &&
+    (it.topSize || "") === (topSize || "") &&
+    (it.bottomSize || "") === (bottomSize || "")
+  );
+
   if (idx >= 0) {
     const nextQty = (cart.items[idx].quantity || 0) + quantity;
-    if (nextQty > (product.stock ?? 0)) {
-      return res.status(400).json({ message: "Insufficient stock" });
-    }
+    if (nextQty > stock) return fail(res, "Insufficient stock", 400);
     cart.items[idx].quantity = nextQty;
   } else {
-    if (quantity > (product.stock ?? 0)) {
-      return res.status(400).json({ message: "Insufficient stock" });
-    }
-    cart.items.push({ productId, quantity, size: size || "" });
+    if (quantity > stock) return fail(res, "Insufficient stock", 400);
+    cart.items.push({ 
+      productId, 
+      quantity, 
+      size: size || "", 
+      topSize: topSize || "", 
+      bottomSize: bottomSize || "" 
+    });
   }
   await cart.save();
   return ok(res, cart, "Product added to cart");

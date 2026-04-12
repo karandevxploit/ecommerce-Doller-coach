@@ -18,6 +18,11 @@ const REFRESH_TOKEN_COOKIE_OPTIONS = {
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
 };
 
+const ACCESS_TOKEN_COOKIE_OPTIONS = {
+  ...REFRESH_TOKEN_COOKIE_OPTIONS,
+  maxAge: 15 * 60 * 1000, // 15 minutes
+};
+
 function buildPublicUser(user) {
   if (!user) return null;
   return {
@@ -45,11 +50,13 @@ const sendTokens = (res, user, message = "Success") => {
   const accessToken = AuthService.generateAccessToken(user);
   const refreshToken = AuthService.generateRefreshToken(user);
 
+  res.cookie("accessToken", accessToken, ACCESS_TOKEN_COOKIE_OPTIONS);
   res.cookie("refreshToken", refreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);
 
   return ok(res, {
-    token: accessToken,
     user: buildPublicUser(user),
+    // Token is now in HttpOnly cookie, but we send it in body for legacy frontend support (optional)
+    token: accessToken, 
   }, message);
 };
 
@@ -83,7 +90,7 @@ exports.register = asyncHandler(async (req, res) => {
     expiresAt,
   });
 
-  logger.info(`[Debug] Generating Registration OTP: ${code} for ${normalizedEmail}`);
+  // logger.info(`[Debug] Generating Registration OTP: ${code} for ${normalizedEmail}`);
   
   logger.info(`[TRACE] Triggering Registration for: ${normalizedEmail}`);
   
@@ -106,8 +113,27 @@ exports.login = asyncHandler(async (req, res) => {
     return fail(res, "Email and password are required", 400);
   }
 
-  const user = await User.findOne({ email: String(email).toLowerCase().trim() }).select("+password");
-  if (!user || !(await bcrypt.compare(String(password), user.password || ""))) {
+  const user = await User.findOne({ email: String(email).toLowerCase().trim() }).select("+password +loginAttempts +lockUntil");
+  
+  if (!user) {
+    return fail(res, "Invalid email or password", 401);
+  }
+
+  // 1. Check if account is locked
+  if (user.lockUntil && user.lockUntil > Date.now()) {
+    const remainingTime = Math.ceil((user.lockUntil - Date.now()) / (60 * 1000));
+    return fail(res, `Account is temporarily locked. Try again in ${remainingTime} minutes.`, 423);
+  }
+
+  // 2. Verify password
+  const isMatch = await bcrypt.compare(String(password), user.password || "");
+  if (!isMatch) {
+    user.loginAttempts += 1;
+    if (user.loginAttempts >= 5) {
+      user.lockUntil = new Date(Date.now() + 30 * 60 * 1000); // 30 min lock
+      logger.warn(`Account locked: ${user.email} after 5 failed attempts.`);
+    }
+    await user.save();
     return fail(res, "Invalid email or password", 401);
   }
 
@@ -115,11 +141,17 @@ exports.login = asyncHandler(async (req, res) => {
     return fail(res, "Email not verified", 403);
   }
 
+  // 3. Reset lockout on success
+  user.loginAttempts = 0;
+  user.lockUntil = undefined;
+  await user.save();
+
   logger.info(`User logged in: ${user.email}`);
   return sendTokens(res, user, "Login successful");
 });
 
 exports.logout = asyncHandler(async (req, res) => {
+  res.clearCookie("accessToken", ACCESS_TOKEN_COOKIE_OPTIONS);
   res.clearCookie("refreshToken", REFRESH_TOKEN_COOKIE_OPTIONS);
   return ok(res, null, "Logged out successfully");
 });
@@ -135,17 +167,14 @@ exports.refreshToken = asyncHandler(async (req, res) => {
     return fail(res, "Invalid or expired refresh token", 401);
   }
 
-  const user = await User.findById(decoded.id).lean();
+  // Find user and include lockout fields just in case
+  const user = await User.findById(decoded.id).select("+loginAttempts +lockUntil");
   if (!user) {
     return fail(res, "User not found", 401);
   }
 
-  const newAccessToken = AuthService.generateAccessToken(user);
-  // Optionally rotate refresh token
-  const newRefreshToken = AuthService.generateRefreshToken(user);
-  res.cookie("refreshToken", newRefreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);
-
-  return ok(res, { token: newAccessToken, user: buildPublicUser(user) }, "Token refreshed");
+  // Refresh Token Rotation: invalidate/clear old, send new
+  return sendTokens(res, user, "Token refreshed");
 });
 
 exports.adminLogin = asyncHandler(async (req, res) => {
@@ -154,17 +183,33 @@ exports.adminLogin = asyncHandler(async (req, res) => {
     return fail(res, "Email and password are required", 400);
   }
 
-  const user = await User.findOne({ email: String(email).toLowerCase().trim() }).select("+password");
+  const user = await User.findOne({ email: String(email).toLowerCase().trim() }).select("+password +loginAttempts +lockUntil");
   if (!user || user.role !== "admin") {
     logger.warn(`Unauthorized admin login attempt: ${email} (User found: ${Boolean(user)})`);
     return fail(res, "Access denied", 403);
   }
 
+  // 1. Check if account is locked
+  if (user.lockUntil && user.lockUntil > Date.now()) {
+    const remainingTime = Math.ceil((user.lockUntil - Date.now()) / (60 * 1000));
+    return fail(res, `Account is temporarily locked. Try again in ${remainingTime} minutes.`, 423);
+  }
+
   const isMatch = await bcrypt.compare(String(password), user.password || "");
   if (!isMatch) {
-    logger.warn(`Admin password mismatch for: ${email}`);
+    user.loginAttempts += 1;
+    if (user.loginAttempts >= 5) {
+      user.lockUntil = new Date(Date.now() + 60 * 60 * 1000); // 1 hour lock for admin
+      logger.error(`CRITICAL: Admin account locked: ${user.email} after 5 failed attempts.`);
+    }
+    await user.save();
     return fail(res, "Invalid email or password", 401);
   }
+
+  // 2. Reset lockout on success
+  user.loginAttempts = 0;
+  user.lockUntil = undefined;
+  await user.save();
 
   logger.info(`Admin logged in successfully: ${user.email}`);
   return sendTokens(res, user, "Admin login successful");
@@ -177,7 +222,14 @@ exports.adminRegister = asyncHandler(async (req, res) => {
   }
 
   if (secret !== process.env.ADMIN_SECRET) {
+    logger.warn(`Invalid admin secret attempt for email: ${email}`);
     return fail(res, "Invalid admin secret", 401);
+  }
+
+  // Prevent registration in production unless explicitly allowed
+  if (env.NODE_ENV === "production" && !process.env.ALLOW_ADMIN_REGISTRATION) {
+    logger.warn(`Admin registration attempted in production for: ${email}`);
+    return fail(res, "Registration disabled", 403);
   }
 
   const existingAdmin = await User.findOne({ role: "admin" }).lean();
@@ -218,7 +270,7 @@ exports.sendOtp = asyncHandler(async (req, res) => {
   await Otp.updateMany({ userId: user._id, channel: "password_reset" }, { $set: { usedAt: new Date() } });
   await Otp.create({ userId: user._id, channel: "password_reset", email: user.email, codeHash, expiresAt });
   
-  logger.info(`[Debug] Generating Password Reset OTP: ${code} for ${user.email}`);
+  // logger.info(`[Debug] Generating Password Reset OTP: ${code} for ${user.email}`);
 
   await sendEmail({
     to: user.email,
@@ -328,7 +380,7 @@ exports.requestLoginOtp = asyncHandler(async (req, res) => {
     await Otp.updateMany({ userId: user._id, channel: "login" }, { $set: { usedAt: new Date() } });
     await Otp.create({ userId: user._id, channel: "login", email: user.email, codeHash: hashOtpCode(code), expiresAt: new Date(Date.now() + 10 * 60 * 1000) });
   
-    logger.info(`[Debug] Generating Login OTP: ${code} for ${user.email}`);
+    // logger.info(`[Debug] Generating Login OTP: ${code} for ${user.email}`);
 
     await sendEmail({
       to: user.email,

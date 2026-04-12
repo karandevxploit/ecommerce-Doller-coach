@@ -74,7 +74,7 @@ const OrderCard = ({ order }) => (
       </div>
       <div className="flex flex-col items-end gap-0.5">
         <span className="text-[9px] uppercase tracking-widest text-gray-500 font-bold">Total</span>
-        <span className="text-xl font-black text-white tracking-tight">{formatPrice(order.totalAmount)}</span>
+        <span className="text-xl font-black text-white tracking-tight">{formatPrice(order.total || 0)}</span>
       </div>
     </div>
 
@@ -109,20 +109,38 @@ const OrderCard = ({ order }) => (
     </div>
 
     {/* Summary Details */}
-    <div className="mt-5 pt-5 border-t border-white/5 grid grid-cols-2 gap-4">
+    <div className="mt-6 pt-6 border-t border-white/5 space-y-3">
+        <div className="flex justify-between items-center text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+            <span>Subtotal</span>
+            <span>{formatPrice(order.subtotal || 0)}</span>
+        </div>
+        {order.discount > 0 && (
+            <div className="flex justify-between items-center text-[10px] font-bold text-green-400 uppercase tracking-widest">
+                <span>Discount</span>
+                <span>-{formatPrice(order.discount)}</span>
+            </div>
+        )}
+        <div className="flex justify-between items-center text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+            <span>Tax (GST)</span>
+            <span>{formatPrice(order.gst || 0)}</span>
+        </div>
+        <div className="flex justify-between items-center text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+            <span>Logistics Fee</span>
+            <span className="text-green-400 uppercase">Complimentary</span>
+        </div>
+    </div>
+
+    {/* Final Total */}
+    <div className="mt-5 pt-5 border-t border-white/10 flex justify-between items-center">
         <div className="space-y-0.5">
-            <p className="text-[8px] uppercase tracking-widest text-gray-500 font-bold">Payment</p>
+            <p className="text-[9px] uppercase tracking-widest text-[#0f172a] font-black bg-white/10 px-2 py-0.5 rounded-full inline-block">Grand Total Due</p>
             <div className="flex items-center gap-1.5 text-white">
                 <CreditCard size={12} className="text-blue-500" />
-                <span className="text-[10px] font-bold">Secure</span>
+                <span className="text-[10px] font-bold">Encrypted Manifest</span>
             </div>
         </div>
-        <div className="space-y-0.5 text-right md:text-left">
-            <p className="text-[8px] uppercase tracking-widest text-gray-500 font-bold">Logistics</p>
-            <div className="flex items-center justify-end md:justify-start gap-1.5 text-white">
-                <Truck size={12} className="text-blue-500" />
-                <span className="text-[10px] font-bold">Express</span>
-            </div>
+        <div className="text-right">
+            <span className="text-2xl font-black text-white tracking-tighter">{formatPrice(order.total || 0)}</span>
         </div>
     </div>
   </motion.div>

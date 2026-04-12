@@ -9,12 +9,16 @@ class OrderService {
     let subtotal = 0;
     const validatedProducts = [];
 
+    const productIds = products.map((p) => p.productId);
+    const dbProducts = await productRepository.model.find({ _id: { $in: productIds } }).lean();
+    const productMap = new Map(dbProducts.map((p) => [p._id.toString(), p]));
+
     for (const item of products) {
-      const product = await productRepository.findById(item.productId);
+      const product = productMap.get(item.productId.toString());
       if (!product) throw new Error(`Product ${item.productId} not found`);
       
       if (product.stock < item.quantity) {
-        throw new Error(`Insufficient stock for product: ${product.name}`);
+        throw new Error(`Insufficient stock for product: ${product.name || product.title}`);
       }
 
       const price = product.discountPrice > 0 ? product.discountPrice : product.price;
@@ -23,7 +27,7 @@ class OrderService {
 
       validatedProducts.push({
         productId: product._id,
-        title: product.name,
+        title: product.name || product.title,
         quantity: item.quantity,
         price: price,
         size: item.size,
@@ -96,13 +100,20 @@ class OrderService {
       appliedDiscount = discountData;
     }
 
-    const totalAmount = subtotal - discountAmount;
+    // Absolute Backend Logic: GST 18%, Delivery 0
+    const gst = Math.round(subtotal * 0.18);
+    const delivery = 0;
+    const discount = discountAmount;
+    const total = subtotal - discount + gst + delivery;
 
     return {
       products: validatedProducts,
-      subtotalAmount: subtotal,
-      discountAmount,
-      totalAmount,
+      subtotal,
+      discount,
+      delivery,
+      gst,
+      total,
+      gstPercent: 18,
       coupon: appliedDiscount ? { 
         code: appliedDiscount.code || appliedDiscount.couponCode, 
         id: appliedDiscount._id,
@@ -112,58 +123,99 @@ class OrderService {
   }
 
   async createOrder(userId, orderData) {
-    const { products, subtotalAmount, discountAmount, totalAmount, address, paymentMethod, couponCode } = orderData;
+    const { 
+      products, subtotal, discount, 
+      delivery, gst, total, 
+      address, paymentMethod, couponCode 
+    } = orderData;
+    const mongoose = require("mongoose");
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    // Atomic stock check and decrease
-    for (const item of products) {
-      const updatedProduct = await productRepository.updateStock(item.productId, -item.quantity);
-      if (updatedProduct.stock < 0) {
-        // Rollback already decreased stock (simplified, for better consistency use a transaction)
-        // This is a basic mitigation without sessions
-        await productRepository.updateStock(item.productId, item.quantity);
-        throw new Error(`Stock ran out for ${item.title} during order placement`);
+    try {
+      // 1. Atomic stock check and decrease
+      for (const item of products) {
+        // Find and update if stock >= quantity
+        const updatedProduct = await productRepository.model.findOneAndUpdate(
+          { _id: item.productId, stock: { $gte: item.quantity } },
+          { $inc: { stock: -item.quantity } },
+          { session, new: true }
+        );
+
+        if (!updatedProduct) {
+          throw new Error(`Insufficient stock for ${item.title} or product was updated during checkout.`);
+        }
       }
+
+      // 2. Prepare shipping address
+      let shippingAddress = {};
+      if (typeof address === "object") {
+        shippingAddress = {
+          name: address.name || "",
+          phone: address.phone || "",
+          address: address.address || address.addressLine1 || "",
+          city: address.city || "",
+          state: address.state || "",
+          pincode: address.pincode || "",
+        };
+      }
+
+      const cleanAddressString = typeof address === "object" 
+        ? `${address.address || address.addressLine1 || ""}, ${address.city || ""}, ${address.state || ""} - ${address.pincode || ""}`
+        : address;
+
+      // 3. Absolute Persistence Manifest: Re-calculate GST (18%) and Total on the fly
+      const finalGst = Math.round(subtotal * 0.18);
+      const finalTotal = subtotal - discount + finalGst;
+
+      const order = await orderRepository.create({
+        userId,
+        products,
+        subtotal,
+        discount,
+        delivery: 0, // Enforced Free Delivery
+        gst: finalGst,
+        total: finalTotal,
+        shippingAddress,
+        paymentMethod,
+        couponCode: couponCode ? couponCode.toUpperCase() : null,
+        status: "placed",
+      }, { session });
+
+      console.log("ORDER SAVED:", JSON.stringify({ 
+        id: order._id, 
+        subtotal: order.subtotal, 
+        gst: order.gst, 
+        total: order.total 
+      }, null, 2));
+
+      // 4. Finalize coupon usage (if any)
+      if (couponCode) {
+        const code = couponCode.toUpperCase().trim();
+        await Coupon.updateOne(
+          { code },
+          { $inc: { usedCount: 1 } },
+          { session }
+        ).then(async (res) => {
+          if (res.matchedCount === 0) {
+            await Offer.updateOne(
+              { couponCode: code },
+              { $inc: { usedCount: 1 } },
+              { session }
+            );
+          }
+        });
+      }
+
+      await session.commitTransaction();
+      return order;
+    } catch (error) {
+      await session.abortTransaction();
+      logger.error(`Order Creation Transaction Failed: ${error.message}`);
+      throw error;
+    } finally {
+      session.endSession();
     }
-
-    let shippingAddress = {};
-
-    if (typeof address === "object") {
-      shippingAddress = {
-        name: address.name || "",
-        phone: address.phone || "",
-        address: address.address || address.addressLine1 || "",
-        city: address.city || "",
-        state: address.state || "",
-        pincode: address.pincode || "",
-      };
-    }
-
-    // VERIFICATION: Check if phone number exists in shippingAddress
-    if (typeof address === "object" && !shippingAddress.phone) {
-      console.warn("[Order Service] WARNING: Missing phone number in address object for order creation.");
-    }
-
-    console.log("[Order Service] Final shippingAddress object before save:", JSON.stringify(shippingAddress, null, 2));
-
-    const cleanAddressString = typeof address === "object" 
-      ? `${address.address || address.addressLine1 || ""}, ${address.city || ""}, ${address.state || ""} - ${address.pincode || ""}`
-      : address;
-
-    const order = await orderRepository.create({
-      userId,
-      products,
-      subtotalAmount,
-      discountAmount,
-      totalAmount,
-      // Legacy string field now contains ONLY the address (no name or phone)
-      address: cleanAddressString,
-      shippingAddress,
-      paymentMethod,
-      couponCode,
-      status: "placed",
-    });
-
-    return order;
   }
 
   async finalizeCouponUsage(couponCode) {

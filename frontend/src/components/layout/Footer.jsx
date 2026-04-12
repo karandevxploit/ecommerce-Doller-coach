@@ -1,10 +1,10 @@
 import { Link } from "react-router-dom";
-import { 
-  Mail, 
-  MapPin, 
-  Phone, 
-  ArrowRight, 
-  Sparkles, 
+import {
+  Mail,
+  MapPin,
+  Phone,
+  ArrowRight,
+  Sparkles,
   ShieldCheck,
   Globe
 } from "lucide-react";

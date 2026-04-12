@@ -10,12 +10,12 @@ class ProductRepository extends BaseRepository {
     return await this.model.findOne({ slug });
   }
 
-  async updateStock(productId, quantity) {
+  async updateStock(productId, quantity, options = {}) {
     // quantity can be negative to decrease stock
     return await this.model.findByIdAndUpdate(
       productId,
       { $inc: { stock: quantity } },
-      { new: true }
+      { new: true, ...options }
     );
   }
 }

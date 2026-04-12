@@ -41,7 +41,11 @@ const userSchema = new mongoose.Schema(
       lng: { type: Number, default: null },
     },
 
-    fcmToken: { type: String, default: null }
+    fcmToken: { type: String, default: null },
+    
+    // Auth Hardening: Account Lockout
+    loginAttempts: { type: Number, default: 0 },
+    lockUntil: { type: Date },
   },
   { timestamps: true }
 );
@@ -67,5 +71,8 @@ userSchema.pre("save", async function (next) {
     next(err);
   }
 });
+
+const mongoosePaginate = require("mongoose-paginate-v2");
+userSchema.plugin(mongoosePaginate);
 
 module.exports = mongoose.models.User || mongoose.model("User", userSchema);

@@ -7,6 +7,7 @@ import { api } from "../api/client";
 import { mapProduct } from "../api/dynamicMapper";
 import { motion, AnimatePresence } from "framer-motion";
 import { staggerContainer, slideUp, modalTransition, springTransition, scaleIn } from "../utils/motion";
+import SEO from "../components/SEO";
 
 const CATEGORIES = ["All", "MEN", "WOMEN"];
 const TYPES = ["All", "TOPWEAR", "BOTTOMWEAR", "FULL_OUTFIT"];
@@ -34,7 +35,7 @@ export default function Collection() {
   const category = searchParams.get("category") || "All";
   const type = searchParams.get("type") || "All";
   const sort = searchParams.get("sort") || "recommended";
-  const [meta, setMeta] = useState({ page: 1, hasNextPage: false });
+  const [meta, setMeta] = useState({ cursor: null, hasNextPage: false });
   const [fetchingMore, setFetchingMore] = useState(false);
 
   // Core loading effect
@@ -45,17 +46,17 @@ export default function Collection() {
         const query = new URLSearchParams(searchParams);
         if (query.get("category") === "All") query.delete("category");
         if (query.get("type") === "All") query.delete("type");
-        query.set("page", "1");
-        query.set("limit", "48");
+        query.delete("page"); // Explicitly remove legacy page param
+        query.set("limit", "24");
 
         const res = await api.get(`/products?${query.toString()}`);
         const data = res?.data || res || {};
         const list = Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
-        
+
         setProducts(list.map(mapProduct));
         setMeta({
-          page: 1,
-          hasNextPage: data.meta?.hasNextPage || false
+          cursor: data.pagination?.nextCursor || null,
+          hasNextPage: data.pagination?.hasNextPage || false
         });
       } catch (err) {
         console.error("Collection Load Error:", err);
@@ -70,24 +71,23 @@ export default function Collection() {
 
   // Load more logic
   const loadMore = async () => {
-    if (fetchingMore || !meta.hasNextPage) return;
+    if (fetchingMore || !meta.hasNextPage || !meta.cursor) return;
     setFetchingMore(true);
     try {
-      const nextPage = meta.page + 1;
       const query = new URLSearchParams(searchParams);
       if (query.get("category") === "All") query.delete("category");
       if (query.get("type") === "All") query.delete("type");
-      query.set("page", nextPage.toString());
-      query.set("limit", "48");
+      query.set("cursor", meta.cursor);
+      query.set("limit", "24");
 
       const res = await api.get(`/products?${query.toString()}`);
       const data = res?.data || res || {};
       const list = Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
-      
+
       setProducts(prev => [...prev, ...list.map(mapProduct)]);
       setMeta({
-        page: nextPage,
-        hasNextPage: data.meta?.hasNextPage || false
+        cursor: data.pagination?.nextCursor || null,
+        hasNextPage: data.pagination?.hasNextPage || false
       });
     } catch (err) {
       console.error("Load More error:", err);
@@ -108,11 +108,19 @@ export default function Collection() {
 
   const clearFilters = () => setSearchParams({});
 
+  // Dynamic SEO Title
+  const getSEOTitle = () => {
+    if (category === "All" && type === "All") return "Premium Collections";
+    const catPart = category !== "All" ? category : "";
+    const typePart = type !== "All" ? type : "Collection";
+    return `${catPart} ${typePart}`.trim();
+  };
+
   // Helper for size filtering logic
   const toggleSizeFilter = (key, size) => {
     const current = searchParams.get(key)?.split(",") || [];
     const isSelected = current.includes(size);
-    const updated = isSelected 
+    const updated = isSelected
       ? current.filter(x => x !== size)
       : [...current, size];
     updateFilter(key, updated.length ? updated.join(",") : "All");
@@ -120,6 +128,10 @@ export default function Collection() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
+      <SEO 
+        title={getSEOTitle()} 
+        description={`Explore our exclusive ${getSEOTitle().toLowerCase()} at Doller Coach. Premium aesthetic apparel engineered for precision.`}
+      />
       {/* HEADER */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight text-gray-900 leading-tight">Collections</h1>
@@ -133,11 +145,10 @@ export default function Collection() {
             <button
               key={c}
               onClick={() => updateFilter("category", c)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                category === c
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${category === c
                   ? "bg-indigo-600 text-white shadow-md shadow-indigo-100"
                   : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-              }`}
+                }`}
             >
               {c}
             </button>
@@ -145,15 +156,15 @@ export default function Collection() {
         </div>
 
         <div className="relative group">
-          <motion.button 
+          <motion.button
             whileTap={{ scale: 0.95 }}
             className="px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium hover:bg-gray-50 flex items-center gap-2 transition-colors">
             Sort: {SORT_OPTIONS.find((o) => o.value === sort)?.label}
             <ChevronDown size={14} className="group-hover:rotate-180 transition-transform duration-300" />
           </motion.button>
-          
+
           <AnimatePresence>
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, y: 10, scale: 0.95 }}
               whileInView={{ opacity: 1, y: 0, scale: 1 }}
               className="absolute right-0 mt-2 w-48 bg-white border border-gray-100 rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 overflow-hidden"
@@ -183,9 +194,8 @@ export default function Collection() {
                 <button
                   key={c}
                   onClick={() => updateFilter("category", c)}
-                  className={`text-left text-sm font-bold transition-all ${
-                    category === c ? "text-[#0f172a] translate-x-1" : "text-gray-400 hover:text-black"
-                  }`}
+                  className={`text-left text-sm font-bold transition-all ${category === c ? "text-[#0f172a] translate-x-1" : "text-gray-400 hover:text-black"
+                    }`}
                 >
                   {c}
                 </button>
@@ -200,9 +210,8 @@ export default function Collection() {
                 <button
                   key={t}
                   onClick={() => updateFilter("type", t)}
-                  className={`text-left text-sm font-bold transition-all ${
-                    type === t ? "text-[#0f172a] translate-x-1" : "text-gray-400 hover:text-black"
-                  }`}
+                  className={`text-left text-sm font-bold transition-all ${type === t ? "text-[#0f172a] translate-x-1" : "text-gray-400 hover:text-black"
+                    }`}
                 >
                   {t}
                 </button>
@@ -223,11 +232,10 @@ export default function Collection() {
                         <button
                           key={s}
                           onClick={() => toggleSizeFilter("topSizes", s)}
-                          className={`h-10 flex items-center justify-center rounded-lg border text-[10px] font-black transition-all ${
-                            isSelected 
-                              ? "bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100" 
+                          className={`h-10 flex items-center justify-center rounded-lg border text-[10px] font-black transition-all ${isSelected
+                              ? "bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100"
                               : "bg-white text-gray-400 border-gray-100 hover:border-gray-300"
-                          }`}
+                            }`}
                         >
                           {s}
                         </button>
@@ -245,11 +253,10 @@ export default function Collection() {
                         <button
                           key={s}
                           onClick={() => toggleSizeFilter("bottomSizes", s)}
-                          className={`h-10 flex items-center justify-center rounded-lg border text-[10px] font-black transition-all ${
-                            isSelected 
-                              ? "bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100" 
+                          className={`h-10 flex items-center justify-center rounded-lg border text-[10px] font-black transition-all ${isSelected
+                              ? "bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100"
                               : "bg-white text-gray-400 border-gray-100 hover:border-gray-300"
-                          }`}
+                            }`}
                         >
                           {s}
                         </button>
@@ -268,11 +275,10 @@ export default function Collection() {
                       <button
                         key={s}
                         onClick={() => toggleSizeFilter("sizes", s)}
-                        className={`h-10 flex items-center justify-center rounded-lg border text-[10px] font-black transition-all ${
-                          isSelected 
-                            ? "bg-[#0f172a] text-white border-[#0f172a]" 
+                        className={`h-10 flex items-center justify-center rounded-lg border text-[10px] font-black transition-all ${isSelected
+                            ? "bg-[#0f172a] text-white border-[#0f172a]"
                             : "bg-white text-gray-400 border-gray-100 hover:border-gray-300"
-                        }`}
+                          }`}
                       >
                         {s}
                       </button>
@@ -294,7 +300,7 @@ export default function Collection() {
         </aside>
 
         <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar h-full">
-          <motion.div 
+          <motion.div
             variants={staggerContainer(0.08)}
             initial="hidden"
             animate="visible"
@@ -302,15 +308,15 @@ export default function Collection() {
           >
             {loading
               ? [...Array(8)].map((_, i) => (
-                  <motion.div key={`skel-${i}`} variants={slideUp}>
-                    <ProductCardSkeleton />
-                  </motion.div>
-                ))
+                <motion.div key={`skel-${i}`} variants={slideUp}>
+                  <ProductCardSkeleton />
+                </motion.div>
+              ))
               : Array.isArray(products) ? products.map((p) => (
-                  <motion.div key={p?._id || p?.id} variants={slideUp}>
-                    <ProductCard product={p} />
-                  </motion.div>
-                )) : null}
+                <motion.div key={p?._id || p?.id} variants={slideUp}>
+                  <ProductCard product={p} />
+                </motion.div>
+              )) : null}
           </motion.div>
 
           {meta.hasNextPage && (
@@ -321,9 +327,9 @@ export default function Collection() {
                 className="px-12 py-4 bg-[#0f172a] text-white rounded-xl text-xs font-black uppercase tracking-[0.3em] hover:scale-[1.03] active:scale-95 shadow-2xl transition-all disabled:opacity-50 flex items-center gap-3"
               >
                 {fetchingMore ? (
-                   <span className="h-4 w-4 border-2 border-white/30 border-t-white animate-spin rounded-full" />
+                  <span className="h-4 w-4 border-2 border-white/30 border-t-white animate-spin rounded-full" />
                 ) : (
-                   <Sparkles size={16} className="text-[#1e3a8a]" strokeWidth={3} />
+                  <Sparkles size={16} className="text-[#1e3a8a]" strokeWidth={3} />
                 )}
                 {fetchingMore ? "Synchronizing..." : "Explore more"}
               </button>

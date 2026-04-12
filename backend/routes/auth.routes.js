@@ -31,9 +31,9 @@ const {
   setDefaultAddress,
 } = require("../controllers/address.controller");
 
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 250, standardHeaders: true, legacyHeaders: false });
-const adminAuthLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 100, standardHeaders: true, legacyHeaders: false });
-const otpLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 50, standardHeaders: true, legacyHeaders: false });
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: "Too many login attempts. Please try again later." });
+const adminAuthLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false, message: "Too many admin login attempts." });
+const otpLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false, message: "Too many OTP requests." });
 
 router.post("/login", authLimiter, login);
 router.post("/logout", logout);

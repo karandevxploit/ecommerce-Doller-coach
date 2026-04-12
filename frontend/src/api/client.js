@@ -19,6 +19,65 @@ if (!baseURL.endsWith("/api")) {
 }
 
 const PUBLIC_PREFIXES = ["/config", "/products", "/reviews", "/auth", "/orders/check-review"];
+const NON_REFRESHABLE_PATHS = ["/auth/login", "/auth/register", "/auth/refresh-token", "/auth/google", "/auth/verify-otp", "/auth/reset-password", "/auth/profile", "/admin/stats"];
+
+// 2. Request Management System
+const inflightRequests = new Map();
+const requestHistory = new Map();
+const THROTTLE_LIMIT = 10; 
+const THROTTLE_WINDOW = 5000; // 5 seconds
+
+// 3. Circuit Breaker System
+let circuitOpen = false;
+let failureCount = 0;
+let lastFailureAt = 0;
+const TRIP_THRESHOLD = 5;
+const TRIP_WINDOW = 20000; // 20s
+const COOLDOWN = 30000; // 30s
+
+const checkCircuit = () => {
+  if (circuitOpen) {
+    if (Date.now() - lastFailureAt > COOLDOWN) {
+      console.log("[CIRCUIT] Cooldown over. Resetting circuit.");
+      circuitOpen = false;
+      failureCount = 0;
+      return true;
+    }
+    return false;
+  }
+  return true;
+};
+
+const recordFailure = () => {
+  const now = Date.now();
+  if (now - lastFailureAt > TRIP_WINDOW) {
+    failureCount = 1;
+  } else {
+    failureCount++;
+  }
+  lastFailureAt = now;
+  if (failureCount >= TRIP_THRESHOLD) {
+    circuitOpen = true;
+    toast.error("System instability detected. Emergency Circuit Breaker tripped. Pausing requests.");
+  }
+};
+
+// Loop Arrestor: Prevents rapid reloads
+const checkLoopArrestor = (targetUrl) => {
+  const currentPath = window.location.pathname;
+  if (targetUrl && currentPath === targetUrl) return false; // Already there, don't reload
+
+  const lastReload = sessionStorage.getItem("last_reload_timestamp");
+  const now = Date.now();
+  
+  if (lastReload && now - parseInt(lastReload) < 2000) { // 2s safeguard (relaxed from 10s)
+    console.error("[CRITICAL] Rapid reload loop detected. arrest execution.");
+    return false;
+  }
+  
+  sessionStorage.setItem("last_reload_timestamp", now.toString());
+  return true;
+};
 
 export const api = axios.create({
   baseURL,
@@ -28,47 +87,58 @@ export const api = axios.create({
   },
 });
 
-const getAuthToken = () => {
-  try {
-    const auth = localStorage.getItem("auth-storage");
-    if (auth) {
-      const parsed = JSON.parse(auth);
-      return parsed.state?.token || null;
-    }
-    return localStorage.getItem("token");
-  } catch (err) {
-    return null;
+api.interceptors.request.use((config) => {
+  if (!checkCircuit()) {
+    console.warn(`[CIRCUIT] Blocking request to ${config.url} due to open circuit.`);
+    return Promise.reject(new Error("Circuit Breaker Open"));
   }
-};
 
-const getAdminToken = () => localStorage.getItem("adminToken");
-
-api.interceptors.request.use(
-  (config) => {
-    const rawUrl = String(config?.url || "");
-    const reqUrl = rawUrl.startsWith("/") ? rawUrl : `/${rawUrl}`;
-    
-    const onAdminPage = window.location.pathname.startsWith("/admin");
-    const isAdminRoute = reqUrl.startsWith("/admin") || reqUrl.includes("/admin/") || reqUrl.startsWith("/upload");
-    
-    // Recovery: Try all possible token locations
-    const adminToken = localStorage.getItem("adminToken");
-    const userToken = getAuthToken() || localStorage.getItem("token");
-    
-    // Prioritize adminToken for admin context
-    const token = (onAdminPage || isAdminRoute) ? (adminToken || userToken) : userToken;
-
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    } else if (isAdminRoute && import.meta.env.MODE === "development") {
-      // Only warn for protected administrative endpoints in dev
-      console.warn(`[client] Missing admin credentials for: ${reqUrl}`);
+  // Inject Bearer Token from local storage if available
+  try {
+    const rawStorage = localStorage.getItem("auth-storage");
+    if (rawStorage) {
+      const parsed = JSON.parse(rawStorage);
+      const token = parsed?.state?.token;
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
     }
-    
-    return config;
-  },
-  (error) => Promise.reject(error)
-);
+  } catch (err) {
+    console.error("Auth header injection failed", err);
+  }
+
+  return config;
+});
+
+// Wrap GET requests for deduplication and throttling
+const originalGet = api.get;
+api.get = (url, config) => {
+  if (!checkCircuit()) {
+    return Promise.reject(new Error("Circuit Breaker Open"));
+  }
+  const now = Date.now();
+  const key = `${url}${JSON.stringify(config?.params || {})}`;
+
+  // 1. Throttling Check
+  const timestamps = (requestHistory.get(url) || []).filter(t => now - t < THROTTLE_WINDOW);
+  if (timestamps.length >= THROTTLE_LIMIT) {
+    console.warn(`[THROTTLE] Excessive requests to ${url}. Blocking call.`);
+    return Promise.reject(new Error("Request Throttled"));
+  }
+  requestHistory.set(url, [...timestamps, now]);
+
+  // 2. Deduplication Check
+  if (inflightRequests.has(key)) {
+    return inflightRequests.get(key);
+  }
+
+  const promise = originalGet.call(api, url, config).finally(() => {
+    inflightRequests.delete(key);
+  });
+
+  inflightRequests.set(key, promise);
+  return promise;
+};
 
 api.interceptors.response.use(
   (response) => {
@@ -85,64 +155,69 @@ api.interceptors.response.use(
     }
     return body;
   },
-  (error) => {
-    const rawUrl = String(error?.config?.url || "");
-    const reqUrl = rawUrl.startsWith("/") ? rawUrl : `/${rawUrl}`;
-    const isAdminRequest = reqUrl.startsWith("/admin");
-    const isAuthFlowRequest =
-      reqUrl.includes("/auth/login") ||
-      reqUrl.includes("/auth/admin-login") ||
-      reqUrl.includes("/auth/register") ||
-      reqUrl.includes("/auth/verify-") ||
-      reqUrl.includes("/auth/request-login-otp");
-
+  async (error) => {
+    const originalRequest = error.config;
     const status = error.response?.status;
     const data = error.response?.data;
     let message = (data && data.message) || error.message || "An unexpected error occurred.";
 
-    // Handle 521 (Service Unavailable / Down) specifically
-    if (status === 521) {
-      message = "The backend service is currently down or restarting. Please try again in 30 seconds.";
-    }
+    // 1. Handle Token Expiry (Automatic Refresh)
+    const url = originalRequest.url || "";
+    // These paths should NEVER trigger a refresh loop
+    const isRefreshable = !NON_REFRESHABLE_PATHS.some(p => url.includes(p));
 
-    // Handle specific network-level failures (DNS, no internet, CORS blocks)
-    if (!error.response || error.code === "ERR_NETWORK" || error.message === "Network Error") {
-      message = "Server unreachable. This might be a temporary deployment restart or a network issue.";
-      if (import.meta.env.MODE === "development") {
-        console.error("[Network Error Diagnostic]: Check if backend is running on port 8001");
-      }
-    } else if (error.code === "ECONNABORTED") {
-      message = "Request timed out. The server is taking too long to respond.";
-    }
+    if (status === 401 && !originalRequest._retry && isRefreshable) {
+      originalRequest._retry = true;
+      try {
+        await axios.post(`${baseURL}/auth/refresh-token`, {}, { withCredentials: true });
+        return api(originalRequest);
+      } catch (refreshError) {
+        console.error("Session expired, cleaning up local state...");
+        
+        const isAdminRequest = url.includes("/admin");
+        const targetUrl = isAdminRequest ? "/admin/login" : "/login";
 
-    if (status === 401) {
-      const isTokenMissing = !getAuthToken() && !getAdminToken();
-      const isExpired = data?.code === "TOKEN_EXPIRED" || data?.message?.toLowerCase().includes("expired");
-
-      if (!isAuthFlowRequest && (isTokenMissing || isExpired)) {
-        if (isAdminRequest || window.location.pathname.startsWith("/admin")) {
-          localStorage.removeItem("adminToken");
-          localStorage.removeItem("adminUser");
-          if (window.location.pathname !== "/admin/login") {
-            window.location.href = "/admin/login";
-          }
-        } else {
-          localStorage.removeItem("auth-storage");
-          localStorage.removeItem("token");
-          if (window.location.pathname !== "/login") {
-            window.location.href = "/login";
+        // FAIL-SAFE: Check loop arrestor before allowing redirect
+        if (checkLoopArrestor(targetUrl)) {
+          if (isAdminRequest) {
+            localStorage.removeItem("adminUser");
+            window.location.href = targetUrl;
+          } else {
+            localStorage.removeItem("auth-storage");
+            window.location.href = targetUrl;
           }
         }
+        
+        return Promise.reject(refreshError);
       }
-    } else if (status === 403) {
-      if (!isAuthFlowRequest) toast.error("Unauthorized access restricted.");
-    } else if (status === 404) {
-      // toast.error("Resource not found."); // redundant for missing items
+    }
+
+    const errorCode = data?.errorCode || "UNEXPECTED_FAILURE";
+    const requestId = data?.requestId || "N/A";
+
+    if (status >= 500 || !error.response || error.code === "ERR_NETWORK") {
+      recordFailure();
+    }
+
+    // 2. Handle Validation Failures
+    if (errorCode === "VALIDATION_FAILED" && data?.errors) {
+      const fieldErrors = Object.entries(data.errors)
+        .map(([_, msg]) => `• ${msg}`)
+        .join("\n");
+      toast.error(`Input Validation Failed:\n${fieldErrors}`, { duration: 5000 });
+    } else if (status === 429) {
+      toast.error("Too many requests. Please slow down.");
+    } else if (status === 521) {
+      toast.error("Server is currently restarting. Please try again in 30 seconds.");
     } else if (status >= 500) {
-      toast.error(message || translateError("internal server error"));
+      toast.error(`A system error occurred. (Ref: ${requestId})`, { 
+        duration: 8000,
+        position: "bottom-right"
+      });
+    } else if (!error.response || error.code === "ERR_NETWORK") {
+      toast.error("Server unreachable. Please check your connection.");
     } else {
-      const isPublicRoute = PUBLIC_PREFIXES.some(prefix => reqUrl.startsWith(prefix));
-      if (!isPublicRoute) toast.error(translateError(message));
+      toast.error(message);
     }
 
     return Promise.reject(error);

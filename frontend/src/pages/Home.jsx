@@ -16,7 +16,6 @@ export default function Home() {
   const [offers, setOffers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [active, setActive] = useState(0);
-  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     const load = async () => {
@@ -43,10 +42,6 @@ export default function Home() {
       }
     };
     load();
-  }, []);
-  useEffect(() => {
-    const t = setInterval(() => setTick((p) => p + 1), 1000);
-    return () => clearInterval(t);
   }, []);
 
   useEffect(() => {
@@ -94,9 +89,8 @@ export default function Home() {
               <div className="flex items-center gap-2">
                 <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#0f172a]/40">Seasonal Manifest</span>
                 {offers[active]?.status && offers[active].status !== "ACTIVE" && (
-                  <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${
-                    offers[active].status === "COMING" ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"
-                  }`}>
+                  <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${offers[active].status === "COMING" ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"
+                    }`}>
                     {offers[active].status}
                   </span>
                 )}
@@ -133,8 +127,8 @@ export default function Home() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.35 }}
               >
-                <CouponBox 
-                  code={offers[active].couponCode} 
+                <CouponBox
+                  code={offers[active].couponCode}
                   discountText={offers[active].discountValue ? `${offers[active].discountValue}${offers[active].discountType === 'percentage' ? '%' : '₹'} OFF` : ""}
                 />
               </motion.div>
@@ -144,17 +138,7 @@ export default function Home() {
               <div className="mb-6 px-4 py-2 bg-gray-50 border border-gray-100 rounded-xl inline-flex items-center gap-3">
                 <div className="flex flex-col">
                   <span className="text-[7px] font-black uppercase tracking-[0.2em] text-gray-400">Ends In</span>
-                  <span className="text-xs font-black text-[#0f172a] tabular-nums">
-                    {(() => {
-                      const now = new Date();
-                      const end = new Date(offers[active].endDate);
-                      const diff = Math.max(0, end - now);
-                      const h = Math.floor(diff / 3600000);
-                      const m = Math.floor((diff % 3600000) / 60000);
-                      const s = Math.floor((diff % 60000) / 1000);
-                      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-                    })()}
-                  </span>
+                  <CountdownTimer endDate={offers[active].endDate} />
                 </div>
               </div>
             )}
@@ -201,13 +185,13 @@ export default function Home() {
       {/* CATEGORY SEGMENTS - PREMIUM MINIMALIST GRID */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 px-4 md:px-8 max-w-[1400px] mx-auto">
         {[
-          { 
-            name: "MEN", 
+          {
+            name: "MEN",
             img: "/images/category-men.png",
             tag: "ESSENTIALS"
           },
-          { 
-            name: "WOMEN", 
+          {
+            name: "WOMEN",
             img: "/images/category-women.png",
             tag: "COLLECTION"
           }
@@ -227,7 +211,7 @@ export default function Home() {
                 className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
                 alt={c.name}
               />
-              
+
               {/* OVERLAY LAYERS */}
               <div className="absolute inset-0 bg-black/20 group-hover:bg-black/10 transition-colors duration-300" />
               <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
@@ -310,4 +294,25 @@ export default function Home() {
       </motion.section>
     </motion.div>
   );
+}
+function CountdownTimer({ endDate }) {
+  const [timeLeft, setTimeLeft] = useState("");
+
+  useEffect(() => {
+    const update = () => {
+      const now = new Date();
+      const end = new Date(endDate);
+      const diff = Math.max(0, end - now);
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      setTimeLeft(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`);
+    };
+    
+    update();
+    const t = setInterval(update, 1000);
+    return () => clearInterval(t);
+  }, [endDate]);
+
+  return <span className="text-xs font-black text-[#0f172a] tabular-nums">{timeLeft}</span>;
 }
