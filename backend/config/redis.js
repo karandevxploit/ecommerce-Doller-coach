@@ -1,102 +1,90 @@
 const Redis = require("ioredis");
-const logger = require("../utils/logger");
-const env = require("./env");
+const { logger } = require("../utils/logger");
 
-/**
- * PRODUCTION-GRADE RESILIENT REDIS PROXY
- * Ensures 100% uptime by never hanging on connection failures.
- * Transparently swaps between Physical Redis and Mock Fallback.
- */
+// ❗ Load REDIS_URL directly from process.env for absolute certainty
+const REDIS_URL = process.env.REDIS_URL;
 
-class MockRedis {
-  constructor() {
-    this.data = new Map();
-    this.isMock = true;
-    this.status = "ready";
-  }
+console.log("Using Redis URL:", REDIS_URL ? "Loaded ✅" : "Missing ❌");
 
-  async get(key) { return this.data.get(key) || null; }
-  async set(key, val) { this.data.set(key, val); return "OK"; }
-  async del(key) { this.data.delete(key); return 1; }
-  async hset(key, field, val) {
-    if (!this.data.has(key)) this.data.set(key, new Map());
-    this.data.get(key).set(field, val);
-    return 1;
-  }
-  async hgetall(key) {
-    const map = this.data.get(key);
-    return map ? Object.fromEntries(map) : {};
-  }
-  async hdel(key, field) {
-    const map = this.data.get(key);
-    if (map) map.delete(field);
-    return 1;
-  }
-  
-  on() { return this; }
-  duplicate() { return new MockRedis(); }
-  async call() { return null; }
-  quit() { return Promise.resolve("OK"); }
-  disconnect() { return; }
+if (!REDIS_URL) {
+  console.error("❌ REDIS_URL missing in .env");
 }
 
-const mockClient = new MockRedis();
-let physicalClient = null;
+let redis = null;
 
-const createPhysicalClient = () => {
-    if (!env.REDIS_URL || env.REDIS_URL.includes("localhost")) return null;
-    
-    try {
-        const client = new Redis(env.REDIS_URL, {
-            maxRetriesPerRequest: null,
-            enableReadyCheck: true,
-            connectTimeout: 5000,
-            enableOfflineQueue: false, // CRITICAL: Prevents system hang when Redis is down
-            retryStrategy: (times) => Math.min(times * 200, 5000),
-        });
+if (REDIS_URL) {
+  try {
+    redis = new Redis(REDIS_URL, {
+      maxRetriesPerRequest: 2,
+      enableReadyCheck: true,
+      connectTimeout: 10000,
+      lazyConnect: true,
+      retryStrategy: (times) => {
+        if (times > 5) return null; // stop retrying
+        return Math.min(times * 200, 2000);
+      },
+    });
 
-        client.on("error", (err) => {
-            if (err.code === "ENOTFOUND" || err.code === "ETIMEDOUT") {
-                logger.error("Redis: Network Failure. Proxy will use Mock.", { code: err.code });
-            }
-        });
+    redis.on("connect", async () => {
+      console.log("✅ Redis Connected");
+      logger.info("[REDIS_CONNECTED]");
+      
+      // OPTIMIZATION: Ensure no eviction for BullMQ safety
+      try {
+        await redis.config("SET", "maxmemory-policy", "noeviction");
+        logger.info("[REDIS_CONFIG] Policy set to noeviction");
+      } catch (err) {
+        logger.warn("[REDIS_CONFIG_FAILED]", { error: err.message });
+      }
+    });
 
-        return client;
-    } catch (e) {
-        logger.error("Redis: Physical Initialization Failed.", { error: e.message });
-        return null;
-    }
+    redis.on("error", (err) => {
+      console.error("❌ Redis Error:", err.message);
+      logger.error("[REDIS_ERROR]", { message: err.message });
+    });
+
+  } catch (err) {
+    console.error("❌ Redis Initialization Failed:", err.message);
+  }
+}
+
+// ---------- HELPERS ----------
+
+const isRedisReady = () => {
+  return redis && redis.status === "ready";
 };
 
-physicalClient = createPhysicalClient();
+const waitForReady = async (timeout = 8000) => {
+  if (!redis) return;
+  if (redis.status === "ready") return;
 
-/**
- * THE RESILIENCE PROXY
- * Intercepts all calls to the 'redis' object. 
- * If the physical client is not 'ready', it redirects to the Mock.
- */
-const redisProxy = new Proxy({}, {
-    get: (target, prop) => {
-        const client = (physicalClient && physicalClient.status === "ready") ? physicalClient : mockClient;
-        
-        // Handle special properties
-        if (prop === "isMock") return client.isMock || false;
-        if (prop === "status") return client.status;
-        
-        const value = client[prop];
-        if (typeof value === "function") {
-            return (...args) => {
-                try {
-                    return value.apply(client, args);
-                } catch (err) {
-                    logger.warn(`Redis Proxy: Operation ${String(prop)} failed.`, { error: err.message });
-                    // If it breaks, try the mock once as ultimate fallback
-                    return typeof mockClient[prop] === "function" ? mockClient[prop].apply(mockClient, args) : null;
-                }
-            };
-        }
-        return value;
-    }
-});
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      logger.warn("[REDIS_BOOT_TIMEOUT]");
+      resolve();
+    }, timeout);
 
-module.exports = redisProxy;
+    redis.once("ready", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+};
+
+const safeCall = async (fn) => {
+  if (!isRedisReady()) return null;
+  try {
+    return await fn(redis);
+  } catch (err) {
+    logger.warn("[REDIS_FAIL]", { message: err.message });
+    return null;
+  }
+};
+
+module.exports = {
+  redis,
+  rawClient: redis, // Compatibility alias
+  safeCall,
+  isRedisReady,
+  waitForReady,
+};
