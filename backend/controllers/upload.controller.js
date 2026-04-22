@@ -1,88 +1,163 @@
-const cloudinary = require("../config/cloudinary");
+const cloudinary = require("../config/cloudinary").getCloudinary();
 const { ok, fail } = require("../utils/apiResponse");
+const fs = require("fs");
+const path = require("path");
 
-/**
- * Upload single image to Cloudinary via stream
- */
-exports.uploadSingle = async (req, res) => {
-  try {
-    if (!req.file) {
-      return fail(res, "No file uploaded", 400);
-    }
+// ===============================
+// CONFIG
+// ===============================
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const ALLOWED_VIDEO_TYPES = ["video/mp4", "video/webm"];
 
+// ===============================
+// SAFE LOGGER
+// ===============================
+const log = (type, msg, data) => {
+  console.log(`[UPLOAD][${type}] ${msg}`, data || "");
+};
+
+// ===============================
+// SAFE FILE DELETE (ASYNC)
+// ===============================
+const safeDelete = (filePath) => {
+  if (!filePath) return;
+  fs.unlink(filePath, (err) => {
+    if (err) log("WARN", "File delete failed", err.message);
+  });
+};
+
+// ===============================
+// VALIDATION
+// ===============================
+const validateFile = (file, allowedTypes) => {
+  if (!file) return "No file uploaded";
+
+  if (file.size > MAX_FILE_SIZE) {
+    return "File too large (max 10MB)";
+  }
+
+  if (!allowedTypes.includes(file.mimetype)) {
+    return "Invalid file type";
+  }
+
+  return null;
+};
+
+// ===============================
+// STREAM UPLOAD (BEST PRACTICE)
+// ===============================
+const streamUpload = (buffer, options = {}) => {
+  return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
-      { folder: "products" },
-      (error, result) => {
-        if (error) {
-          console.error("Cloudinary Single Upload Error:", error);
-          return fail(res, "Upload failed", 500);
-        }
-        return ok(res, { imageUrl: result.secure_url }, "");
+      {
+        ...options,
+        quality: "auto",
+        fetch_format: "auto",
+      },
+      (err, result) => {
+        if (err) return reject(err);
+        resolve(result);
       }
     );
 
-    stream.end(req.file.buffer);
-  } catch (error) {
-    console.error("Upload Single Error:", error);
-    return fail(res, "Server error during upload", 500);
+    stream.end(buffer);
+  });
+};
+
+// ===============================
+// SINGLE IMAGE UPLOAD
+// ===============================
+exports.uploadSingle = async (req, res) => {
+  try {
+    console.log("[DEBUG] SINGLE FILE:", req.file);
+    console.log("[DEBUG] BODY:", req.body);
+    const error = validateFile(req.file, ALLOWED_IMAGE_TYPES);
+    if (error) return fail(res, error, 400);
+
+    log("START", "Uploading image", {
+      name: req.file.originalname,
+      size: req.file.size,
+    });
+
+    const result = await streamUpload(req.file.buffer, {
+      folder: "products/images",
+    });
+
+    log("SUCCESS", "Image uploaded", result.secure_url);
+
+    return res.json({
+      success: true,
+      url: result.secure_url,
+      public_id: result.public_id,
+    });
+
+  } catch (err) {
+    log("ERROR", err.message);
+    return fail(res, "Upload failed", 500);
   }
 };
 
-/**
- * Upload multiple images to Cloudinary via stream
- */
+// ===============================
+// MULTIPLE IMAGE UPLOAD
+// ===============================
 exports.uploadMultiple = async (req, res) => {
   try {
-    if (!req.files || req.files.length === 0) {
-      return fail(res, "No files received", 400);
+    if (!req.files || !req.files.length) {
+      return res.status(400).json({ success: false, message: "No files uploaded" });
     }
 
-    const urls = [];
+    console.log("[DEBUG] MULTIPLE FILES:", req.files.length);
+    console.log("[DEBUG] BODY:", req.body);
 
-    for (const [index, file] of req.files.entries()) {
-      if (!file.buffer) {
-        throw new Error(`File buffer missing for file ${index + 1}`);
-      }
+    const uploads = req.files.map(async (file) => {
+      const error = validateFile(file, ALLOWED_IMAGE_TYPES);
+      if (error) throw new Error(error);
 
-      const b64 = file.buffer.toString("base64");
-      const dataURI = `data:${file.mimetype};base64,${b64}`;
-      
-      try {
-        const result = await cloudinary.uploader.upload(dataURI, {
-          folder: "products",
-          resource_type: "auto",
-          timeout: 60000 // 60 seconds timeout
-        });
+      return streamUpload(file.buffer, {
+        folder: "products/images",
+      });
+    });
 
-        urls.push(result.secure_url);
-      } catch (cloudinaryErr) {
-        throw new Error(`Cloudinary upload failed: ${cloudinaryErr.message}`);
-      }
-    }
+    const results = await Promise.all(uploads);
 
-    return ok(res, { images: urls }, "");
-  } catch (error) {
-    console.error("FINAL UPLOAD ERROR:", error);
-    return fail(res, error.message || "Internal server error", 500);
+    const urls = results.map((r) => r.secure_url);
+
+    return res.json({ success: true, urls });
+
+  } catch (err) {
+    log("ERROR", err.message);
+    return res.status(400).json({ success: false, message: err.message });
   }
 };
 
-/**
- * Upload one product video to Cloudinary
- */
+// ===============================
+// VIDEO UPLOAD
+// ===============================
 exports.uploadVideo = async (req, res) => {
   try {
-    if (!req.file) return fail(res, "No video uploaded", 400);
-    const b64 = req.file.buffer.toString("base64");
-    const dataURI = `data:${req.file.mimetype};base64,${b64}`;
-    const result = await cloudinary.uploader.upload(dataURI, {
+    const error = validateFile(req.file, ALLOWED_VIDEO_TYPES);
+    if (error) return fail(res, error, 400);
+
+    log("START", "Uploading video", {
+      name: req.file.originalname,
+      size: req.file.size,
+    });
+
+    const result = await streamUpload(req.file.buffer, {
       folder: "products/videos",
       resource_type: "video",
-      timeout: 120000,
     });
-    return ok(res, { videoUrl: result.secure_url }, "");
-  } catch (error) {
-    console.error("uploadVideo:", error);
-    return fail(res, error.message || "Video upload failed", 500);
+
+    log("SUCCESS", "Video uploaded", result.secure_url);
+
+    return ok(res, {
+      videoUrl: result.secure_url,
+      public_id: result.public_id,
+    });
+
+  } catch (err) {
+    log("ERROR", err.message);
+    return fail(res, "Video upload failed", 500);
   }
 };

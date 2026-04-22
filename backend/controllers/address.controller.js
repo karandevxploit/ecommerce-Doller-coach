@@ -1,140 +1,206 @@
 const asyncHandler = require("express-async-handler");
+const mongoose = require("mongoose");
 const addressRepository = require("../repositories/address.repository");
 const User = require("../models/user.model");
 const { ok, fail } = require("../utils/apiResponse");
+const { addressSchema } = require("../validations/address.validation");
 
-function buildFormattedAddress({ name, phone, addressLine1, addressLine2, city, state, pincode, country }) {
-  const parts = [
-    name ? `<b>${name}</b>` : "",
-    phone ? `(${phone})` : "",
-    addressLine1,
-    addressLine2,
-    city,
-    state,
-    pincode,
-    country,
+function buildFormattedAddress(data) {
+  return [
+    data.name && `<b>${data.name}</b>`,
+    data.phone && `(${data.phone})`,
+    data.addressLine1,
+    data.addressLine2,
+    data.city,
+    data.state,
+    data.pincode,
+    data.country,
   ]
-    .map((p) => (p || "").trim())
-    .filter(Boolean);
-
-  return parts.join(", ");
+    .filter(Boolean)
+    .join(", ");
 }
 
-exports.listAddresses = asyncHandler(async (req, res) => {
-  const addresses = await addressRepository.findByUser(req.user._id);
-  return ok(res, addresses);
-});
-
+// ===============================
+// CREATE ADDRESS (TRANSACTION SAFE)
+// ===============================
 exports.createAddress = asyncHandler(async (req, res) => {
+  const payload = addressSchema.parse(req.body);
   const userId = req.user._id;
-  const payload = req.body;
 
-  if (!payload.name || !payload.phone || !payload.addressLine1 || !payload.city || !payload.state || !payload.pincode) {
-    return fail(res, "Mandatory fields missing: name, phone, addressLine1, city, state, pincode", 400);
-  }
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-  // Handle default address logic
-  if (payload.isDefault) {
-    await addressRepository.unsetDefaults(userId);
-  }
-
-  const addr = await addressRepository.create({
-    ...payload,
-    userId,
-    isDefault: Boolean(payload.isDefault),
-  });
-
-  // Maintain User references
-  await User.updateOne({ _id: userId }, { $addToSet: { addresses: addr._id } });
-
-  if (addr.isDefault) {
-    const formatted = buildFormattedAddress(addr);
-    await User.updateOne(
-      { _id: userId },
-      {
-        $set: {
-          defaultAddressId: addr._id,
-          address: formatted,
-          location: { lat: addr.latitude || null, lng: addr.longitude || null },
-        },
-      }
-    );
-  }
-
-  return ok(res, addr, "Address created", 201);
-});
-
-exports.updateAddress = asyncHandler(async (req, res) => {
-  const userId = req.user._id;
-  const { id } = req.params;
-  const payload = req.body;
-
-  const address = await addressRepository.findByUserIdAndId(userId, id);
-  if (!address) return fail(res, "Address not found", 404);
-
-  if (payload.isDefault) {
-    await addressRepository.unsetDefaults(userId);
-    await User.updateOne({ _id: userId }, { $set: { defaultAddressId: address._id } });
-  }
-
-  const updated = await addressRepository.updateById(id, payload);
-
-  if (updated.isDefault) {
-    const formatted = buildFormattedAddress(updated);
-    await User.updateOne(
-      { _id: userId },
-      {
-        $set: {
-          address: formatted,
-          location: { lat: updated.latitude || null, lng: updated.longitude || null },
-        },
-      }
-    );
-  }
-
-  return ok(res, updated, "Address updated");
-});
-
-exports.deleteAddress = asyncHandler(async (req, res) => {
-  const userId = req.user._id;
-  const { id } = req.params;
-
-  const address = await addressRepository.findByUserIdAndId(userId, id);
-  if (!address) return fail(res, "Address not found", 404);
-
-  await addressRepository.deleteById(id);
-
-  const updateOps = { $pull: { addresses: id } };
-  if (address.isDefault) {
-    updateOps.$set = { defaultAddressId: null };
-  }
-  await User.updateOne({ _id: userId }, updateOps);
-
-  return ok(res, { deleted: true }, "Address deleted");
-});
-
-exports.setDefaultAddress = asyncHandler(async (req, res) => {
-  const userId = req.user._id;
-  const { id } = req.params;
-
-  const address = await addressRepository.findByUserIdAndId(userId, id);
-  if (!address) return fail(res, "Address not found", 404);
-
-  await addressRepository.unsetDefaults(userId);
-  const updated = await addressRepository.updateById(id, { isDefault: true });
-
-  const formatted = buildFormattedAddress(updated);
-  await User.updateOne(
-    { _id: userId },
-    {
-      $set: {
-        defaultAddressId: id,
-        address: formatted,
-        location: { lat: updated.latitude || null, lng: updated.longitude || null },
-      },
+  try {
+    if (payload.isDefault) {
+      await addressRepository.unsetDefaults(userId, session);
     }
-  );
 
-  return ok(res, { ok: true }, "Default address set");
+    const addr = await addressRepository.create(
+      { ...payload, userId },
+      session
+    );
+
+    const update = { $addToSet: { addresses: addr._id } };
+
+    if (addr.isDefault) {
+      update.$set = {
+        defaultAddressId: addr._id,
+        address: buildFormattedAddress(addr),
+        location: {
+          lat: addr.latitude || null,
+          lng: addr.longitude || null,
+        },
+      };
+    }
+
+    await User.updateOne({ _id: userId }, update, { session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return ok(res, addr, "Address created", 201);
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    throw err;
+  }
 });
 
+// ===============================
+// UPDATE ADDRESS (SAFE)
+// ===============================
+exports.updateAddress = asyncHandler(async (req, res) => {
+  const payload = addressSchema.parse(req.body);
+  const { id } = req.params;
+  const userId = req.user._id;
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const existing = await addressRepository.findByUserIdAndId(userId, id);
+    if (!existing) {
+      await session.abortTransaction();
+      return fail(res, "Not found", 404);
+    }
+
+    if (payload.isDefault) {
+      await addressRepository.unsetDefaults(userId, session);
+    }
+
+    const updated = await addressRepository.updateById(id, payload, session);
+
+    if (updated.isDefault) {
+      await User.updateOne(
+        { _id: userId },
+        {
+          $set: {
+            defaultAddressId: id,
+            address: buildFormattedAddress(updated),
+            location: {
+              lat: updated.latitude || null,
+              lng: updated.longitude || null,
+            },
+          },
+        },
+        { session }
+      );
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return ok(res, updated);
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    throw err;
+  }
+});
+
+// ===============================
+// DELETE ADDRESS (SAFE)
+// ===============================
+exports.deleteAddress = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user._id;
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const address = await addressRepository.findByUserIdAndId(userId, id);
+    if (!address) {
+      await session.abortTransaction();
+      return fail(res, "Not found", 404);
+    }
+
+    await addressRepository.deleteById(id, session);
+
+    const update = {
+      $pull: { addresses: id },
+    };
+
+    // Assign new default if needed
+    if (address.isDefault) {
+      const next = await addressRepository.findOne(userId, session);
+
+      update.$set = {
+        defaultAddressId: next ? next._id : null,
+      };
+    }
+
+    await User.updateOne({ _id: userId }, update, { session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return ok(res, { deleted: true });
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    throw err;
+  }
+});
+
+// ===============================
+// SET DEFAULT (RACE SAFE)
+// ===============================
+exports.setDefaultAddress = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user._id;
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const address = await addressRepository.findByUserIdAndId(userId, id);
+    if (!address) {
+      await session.abortTransaction();
+      return fail(res, "Not found", 404);
+    }
+
+    await addressRepository.unsetDefaults(userId, session);
+    await addressRepository.updateById(id, { isDefault: true }, session);
+
+    await User.updateOne(
+      { _id: userId },
+      {
+        $set: {
+          defaultAddressId: id,
+          address: buildFormattedAddress(address),
+        },
+      },
+      { session }
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return ok(res, { ok: true });
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
+    throw err;
+  }
+});

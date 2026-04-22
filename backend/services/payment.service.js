@@ -2,7 +2,7 @@ const Razorpay = require("razorpay");
 const crypto = require("crypto");
 const env = require("../config/env");
 const orderRepository = require("../repositories/order.repository");
-const logger = require("../utils/logger");
+const { logger } = require("../utils/logger");
 
 class PaymentService {
   constructor() {
@@ -97,11 +97,18 @@ class PaymentService {
         return;
       }
 
-      await orderRepository.updatePaymentInfo(dbOrder._id, {
+      const updated = await orderRepository.updatePaymentInfo(dbOrder._id, {
         paymentId: payment.id,
         signature: "WEBHOOK_VERIFIED",
         status: "PAID",
       });
+
+      // If 'updated' is null, it means the order was already finalized (Race condition winner)
+      if (!updated) {
+        logger.info(`[WEBHOOK_IDEMPOTENCY] Order ${dbOrder._id} already finalized by concurrent process. Skipping logic.`);
+        return;
+      }
+
 
       const orderService = require("./order.service");
       if (dbOrder.couponCode) {

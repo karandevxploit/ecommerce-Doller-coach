@@ -1,17 +1,70 @@
-const express = require("express");
-const router = express.Router();
-const reviewController = require("../controllers/review.controller");
-const { protect, requireAdmin } = require("../middlewares/auth.middleware");
+const router = require("express").Router();
+const { safeHandler } = require("../middlewares/error.middleware");
+const { protect, authorize } = require("../middlewares/auth.middleware");
+const { cacheRoute, clearCache } = require("../middlewares/cache.middleware");
+const { authLimiter } = require("../middlewares/rateLimiter.v2");
 
-// Public
-router.get("/:productId", reviewController.getReviewsByProduct);
+const {
+  createReview,
+  getProductReviews,
+  adminListReviews,
+  approveReview,
+  deleteReview,
+  markHelpful
+} = require("../controllers/review.controller");
 
-// User
-router.post("/", protect, reviewController.addReview);
+/**
+ * PUBLIC ROUTES (CACHED)
+ */
+router.get(
+  "/product/:productId",
+  authLimiter,
+  cacheRoute(300),
+  safeHandler(getProductReviews)
+);
 
-// Admin
-router.get("/admin/list", requireAdmin, reviewController.adminListReviews);
-router.put("/admin/:id/approve", requireAdmin, reviewController.approveReview);
-router.delete("/admin/:id", requireAdmin, reviewController.deleteReview);
+/**
+ * AUTHENTICATED ROUTES
+ */
+router.post(
+  "/",
+  protect,
+  authLimiter,
+  clearCache("products"),
+  safeHandler(createReview)
+);
+
+router.put(
+  "/:reviewId/helpful",
+  protect,
+  authLimiter,
+  safeHandler(markHelpful)
+);
+
+/**
+ * ADMIN ROUTES
+ */
+router.get(
+  "/admin",
+  protect,
+  authorize("admin"),
+  safeHandler(adminListReviews)
+);
+
+router.put(
+  "/admin/:id/approve",
+  protect,
+  authorize("admin"),
+  clearCache("products"),
+  safeHandler(approveReview)
+);
+
+router.delete(
+  "/admin/:id",
+  protect,
+  authorize("admin"),
+  clearCache("products"),
+  safeHandler(deleteReview)
+);
 
 module.exports = router;

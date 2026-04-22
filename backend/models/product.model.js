@@ -1,89 +1,183 @@
 const mongoose = require("mongoose");
+const mongoosePaginate = require("mongoose-paginate-v2");
+
+/**
+ * ENTERPRISE PRODUCT SCHEMA
+ *
+ * Features:
+ * - Variant-level inventory
+ * - SEO slug
+ * - Safe pricing model
+ * - Soft delete
+ * - Better indexing
+ */
+
+const variantSchema = new mongoose.Schema(
+  {
+    sku: { type: String, required: true, index: true },
+
+    color: { type: String, default: "", trim: true },
+    size: { type: String, default: "", trim: true },
+
+    price: { type: Number, required: true, min: 0 },
+    stock: { type: Number, required: true, min: 0 },
+
+    image: { type: String, default: "" },
+  },
+  { _id: false }
+);
 
 const productSchema = new mongoose.Schema(
   {
-    title: { type: String, required: true, trim: true },
-    brand: { type: String, default: "", trim: true },
-    category: { 
-      type: String, 
-      required: true, 
-      enum: ["MEN", "WOMEN"],
-      uppercase: true,
-      index: true 
+    name: { type: String, required: true, trim: true, index: true },
+
+    slug: {
+      type: String,
+      index: true,
+      // handled via pre-save hook for better UX
     },
-    subcategory: { type: String, default: "", trim: true },
-    productType: { type: String, default: "", trim: true },
+
+    category: {
+      type: String,
+      required: true,
+      lowercase: true,
+      index: true,
+    },
+
+    subcategory: { type: String, trim: true, lowercase: true },
+
     description: { type: String, default: "", trim: true },
-    shortDescription: { type: String, default: "", trim: true },
-    fullDescription: { type: String, default: "", trim: true },
-    images: { type: [String], required: true },
-    originalPrice: { type: Number, required: true, min: 0 },
-    discountPrice: { type: Number, default: 0, min: 0 },
+
+    tags: { type: [String], default: [], index: true },
+
+    /**
+     * MEDIA
+     */
+    images: { type: [String], default: [] },
+    primaryImage: { type: String, default: "" },
+    hoverImage: { type: String, default: "" },
+
+    /**
+     * PRICING
+     */
+    originalPrice: { type: Number, min: 0 },
     price: { type: Number, required: true, min: 0 },
+    discountPercent: { type: Number, default: 0 },
+
+    /**
+     * VARIANTS (CRITICAL UPGRADE)
+     */
+    variants: [variantSchema],
+
+    /**
+     * INVENTORY (fallback if no variants)
+     */
     stock: { type: Number, default: 0, min: 0 },
-    sku: { type: String, default: "", trim: true },
-    featured: { type: Boolean, default: false },
-    trending: { type: Boolean, default: false },
-    video: { type: String, default: "", trim: true },
-    type: { 
-      type: String, 
-      required: true, 
-      enum: ["TOPWEAR", "BOTTOMWEAR", "FULL_OUTFIT"],
-      uppercase: true,
-      index: true 
+
+    /**
+     * STATUS
+     */
+    status: {
+      type: String,
+      enum: ["draft", "active", "out_of_stock", "archived"],
+      default: "draft",
+      index: true,
     },
-    sizes: { 
-      type: [String], 
-      default: [] 
+
+    /**
+     * FLAGS
+     */
+    featured: { type: Boolean, default: false, index: true },
+    isTrending: { type: Boolean, default: false, index: true },
+    isBestSeller: { type: Boolean, default: false, index: true },
+
+    /**
+     * RATINGS
+     */
+    ratings: {
+      average: { type: Number, default: 0 },
+      count: { type: Number, default: 0 },
     },
-    topSizes: { 
-      type: [String], 
-      default: [] 
-    },
-    bottomSizes: { 
-      type: [String], 
-      default: [] 
+
+    /**
+     * SOFT DELETE
+     */
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      index: true,
     },
   },
   { timestamps: true }
 );
 
-// Dynamic Size Validation
-productSchema.pre("save", function (next) {
-  const topwearSizes = ["S", "M", "L", "XL", "XXL"];
-  const bottomwearSizes = ["28", "30", "32", "34", "36", "38"];
+/**
+ * PRE-SAVE HOOK
+ */
+productSchema.pre("save", async function (next) {
+  try {
+    // Generate unique slug
+    if (!this.slug && this.name) {
+      let baseSlug = this.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)/g, "");
 
-  if (this.type === "TOPWEAR") {
-    const invalid = (this.sizes || []).find(s => !topwearSizes.includes(s));
-    if (invalid) return next(new Error(`Invalid size for TOPWEAR: ${invalid}`));
-  } else if (this.type === "BOTTOMWEAR") {
-    const invalid = (this.sizes || []).find(s => !bottomwearSizes.includes(s));
-    if (invalid) return next(new Error(`Invalid size for BOTTOMWEAR: ${invalid}`));
-  } else if (this.type === "FULL_OUTFIT") {
-    const invalidTop = (this.topSizes || []).find(s => !topwearSizes.includes(s));
-    const invalidBottom = (this.bottomSizes || []).find(s => !bottomwearSizes.includes(s));
-    if (invalidTop) return next(new Error(`Invalid Top size for FULL_OUTFIT: ${invalidTop}`));
-    if (invalidBottom) return next(new Error(`Invalid Bottom size for FULL_OUTFIT: ${invalidBottom}`));
+      // Check collision
+      const existing = await mongoose.models.Product.findOne({ slug: baseSlug });
+      if (existing && existing._id.toString() !== this._id.toString()) {
+        this.slug = `${baseSlug}-${Math.floor(Math.random() * 10000)}`;
+      } else {
+        this.slug = baseSlug;
+      }
+    }
+
+    // Pricing logic
+    if (this.originalPrice && this.price) {
+      this.discountPercent =
+        ((this.originalPrice - this.price) / this.originalPrice) * 100;
+    }
+
+    // Auto status
+    if (this.stock === 0 && (!this.variants || this.variants.length === 0)) {
+      this.status = "out_of_stock";
+    }
+
+    next();
+  } catch (err) {
+    next(err);
   }
-  next();
 });
-productSchema.virtual("name").get(function () {
-  return this.title;
-});
-productSchema.set("toJSON", { virtuals: true });
-productSchema.set("toObject", { virtuals: true });
 
-// Advanced Production Indexing
-productSchema.index({ createdAt: -1, _id: 1 }); // Optimized for sorted listings
-productSchema.index({ category: 1, price: 1 }); // Compound: Filtering + Sorting
-productSchema.index({ featured: 1 }, { partialFilterExpression: { featured: true } }); // Small Partial Index
-productSchema.index({ trending: 1 }, { partialFilterExpression: { trending: true } }); // Small Partial Index
-productSchema.index({ subcategory: 1 });
-productSchema.index({ productType: 1 });
-productSchema.index({ title: "text", description: "text" }); // Full-Text Search
+/**
+ * INDEXES
+ */
+productSchema.index({ category: 1, subcategory: 1, productType: 1, price: 1 });
+productSchema.index({ isTrending: 1, featured: 1, createdAt: -1 });
+productSchema.index({ createdAt: -1 });
+productSchema.index({ "variants.sku": 1 });
+productSchema.index({ name: "text", description: "text", tags: "text" });
 
-const mongoosePaginate = require("mongoose-paginate-v2");
+/**
+ * STATIC: Update Rating (Atomic)
+ */
+productSchema.statics.updateRating = async function (
+  productId,
+  newRating
+) {
+  return this.updateOne(
+    { _id: productId },
+    {
+      $inc: {
+        "ratings.count": 1,
+        "ratings.average": newRating,
+      },
+    }
+  );
+};
+
 productSchema.plugin(mongoosePaginate);
 
-module.exports = mongoose.models.Product || mongoose.model("Product", productSchema);
-
+module.exports =
+  mongoose.models.Product ||
+  mongoose.model("Product", productSchema);

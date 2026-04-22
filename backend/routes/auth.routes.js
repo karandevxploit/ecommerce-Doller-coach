@@ -1,13 +1,16 @@
 const router = require("express").Router();
-const rateLimit = require("express-rate-limit");
+const { safeHandler } = require("../middlewares/error.middleware");
+const { verifyRecaptcha } = require("../middlewares/recaptcha.middleware");
+const { authLimiter } = require("../middlewares/rateLimiter.v2");
+const validate = require("../middlewares/validate.middleware");
+const mongoose = require("mongoose");
+const { logger } = require("../utils/logger");
 
 const {
   register,
   login,
   logout,
   refreshToken,
-  google: legacyGoogle,
-  phone,
   adminLogin,
   adminRegister,
   adminExists,
@@ -17,12 +20,13 @@ const {
   requestLoginOtp,
   testEmail,
   testOrderEmail,
+  google,
 } = require("../controllers/auth.hybrid.controller");
-
-const { googleAuth } = require("../controllers/auth.controller");
 
 const { isAuthenticated, isAdmin } = require("../middlewares/auth.middleware");
 const { profile, saveFcmToken } = require("../controllers/user.controller");
+const notificationController = require("../controllers/notification.controller");
+
 const {
   listAddresses,
   createAddress,
@@ -31,38 +35,83 @@ const {
   setDefaultAddress,
 } = require("../controllers/address.controller");
 
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: "Too many login attempts. Please try again later." });
-const adminAuthLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false, message: "Too many admin login attempts." });
-const otpLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false, message: "Too many OTP requests." });
+const {
+  loginSchema,
+  registerSchema,
+  sendOtpSchema,
+  verifyOtpSchema,
+  resetPasswordSchema,
+} = require("../validations/auth.validation");
 
-router.post("/login", authLimiter, login);
-router.post("/logout", logout);
-router.post("/refresh-token", refreshToken);
-router.post("/admin-login", adminAuthLimiter, adminLogin);
-router.post("/admin-register", authLimiter, adminRegister);
-router.get("/admin-exists", authLimiter, adminExists);
-router.post("/register", authLimiter, register);
-router.get("/test-email", testEmail);
-router.get("/test-order-email", testOrderEmail);
+/**
+ * PARAM VALIDATION
+ */
+const validateObjectId = (req, res, next) => {
+  if (req.params.id && !mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(400).json({ success: false, message: "Invalid ID" });
+  }
+  next();
+};
 
-router.post("/send-otp", otpLimiter, sendOtp);
-router.post("/request-login-otp", otpLimiter, requestLoginOtp);
-router.post("/verify-otp", otpLimiter, verifyOtp);
-router.post("/reset-password", otpLimiter, resetPassword);
+/**
+ * AUTH ROUTES (HARDENED)
+ */
+router.post("/login", authLimiter, verifyRecaptcha("login"), validate(loginSchema), safeHandler(login));
+router.post("/logout", safeHandler(logout));
+router.post("/refresh-token", authLimiter, safeHandler(refreshToken));
 
-router.post("/google", authLimiter, googleAuth);
-router.post("/phone", authLimiter, phone);
+/**
+ * ADMIN AUTH (STRICT)
+ */
+router.post("/admin-login", (req, res, next) => {
+  console.log(">>> [ROUTE_HIT] POST /api/auth/admin-login at", new Date().toISOString());
+  next();
+}, safeHandler(adminLogin));
 
-// Unified Profile + Notifications
-router.get("/profile", isAuthenticated, profile);
-router.post("/fcm-token", isAuthenticated, saveFcmToken);
-router.get("/notifications", isAuthenticated, require("../controllers/notification.controller").myNotifications);
+// ⚠️ PROTECT THIS (should be internal or restricted)
+router.post("/admin-register", isAuthenticated, isAdmin, authLimiter, safeHandler(adminRegister));
+router.get("/admin-exists", authLimiter, safeHandler(adminExists));
 
-// Unified Addresses
-router.get("/addresses", isAuthenticated, listAddresses);
-router.post("/addresses", isAuthenticated, createAddress);
-router.put("/addresses/:id", isAuthenticated, updateAddress);
-router.delete("/addresses/:id", isAuthenticated, deleteAddress);
-router.post("/addresses/:id/set-default", isAuthenticated, setDefaultAddress);
+/**
+ * USER REGISTER
+ */
+router.post("/register", authLimiter, verifyRecaptcha("register"), validate(registerSchema), safeHandler(register));
+
+/**
+ * EMAIL TEST (ADMIN ONLY)
+ */
+router.get("/test-email", isAuthenticated, isAdmin, safeHandler(testEmail));
+router.get("/test-order-email", isAuthenticated, isAdmin, safeHandler(testOrderEmail));
+
+/**
+ * OTP FLOW (HARDENED)
+ */
+router.post("/send-otp", authLimiter, verifyRecaptcha("default"), validate(sendOtpSchema), safeHandler(sendOtp));
+router.post("/request-login-otp", authLimiter, verifyRecaptcha("default"), safeHandler(requestLoginOtp));
+router.post("/verify-otp", authLimiter, verifyRecaptcha("default"), validate(verifyOtpSchema), safeHandler(verifyOtp));
+router.post("/reset-password", authLimiter, verifyRecaptcha("default"), validate(resetPasswordSchema), safeHandler(resetPassword));
+
+/**
+ * GOOGLE AUTH
+ */
+router.post("/google", authLimiter, verifyRecaptcha("default"), safeHandler(google));
+
+// ❌ REMOVED google-debug (should not exist in production)
+
+/**
+ * PROFILE + NOTIFICATIONS
+ */
+router.get("/profile", isAuthenticated, safeHandler(profile));
+router.post("/fcm-token", isAuthenticated, safeHandler(saveFcmToken));
+router.get("/notifications", isAuthenticated, safeHandler(notificationController.myNotifications));
+
+/**
+ * ADDRESS MANAGEMENT (SAFE)
+ */
+router.get("/addresses", isAuthenticated, safeHandler(listAddresses));
+router.post("/addresses", isAuthenticated, safeHandler(createAddress));
+router.put("/addresses/:id", isAuthenticated, validateObjectId, safeHandler(updateAddress));
+router.delete("/addresses/:id", isAuthenticated, validateObjectId, safeHandler(deleteAddress));
+router.post("/addresses/:id/set-default", isAuthenticated, validateObjectId, safeHandler(setDefaultAddress));
 
 module.exports = router;

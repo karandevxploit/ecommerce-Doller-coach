@@ -1,40 +1,111 @@
 const asyncHandler = require("express-async-handler");
-const Wishlist = require("../models/wishlist.model");
+const mongoose = require("mongoose");
 
+const Wishlist = require("../models/wishlist.model");
+const Product = require("../models/product.model");
+
+const { ok, fail } = require("../utils/apiResponse");
+const { safeCall } = require("../config/redis");
+const { logger } = require("../utils/logger");
+
+const MAX_ITEMS = 50;
+const CACHE_TTL = 300;
+
+// ===============================
+// HELPER
+// ===============================
+const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+// ===============================
+// GET WISHLIST (CACHED)
+// ===============================
 exports.getWishlist = asyncHandler(async (req, res) => {
-  const wishlist = await Wishlist.findOne({ userId: req.user._id }).populate("items.productId").lean();
-  const products = (wishlist?.items || []).map((i) => i.productId).filter(Boolean);
-  res.json(products);
+  const userId = req.user._id;
+  const cacheKey = `wishlist:${userId}`;
+
+  // CACHE
+  const cached = await safeCall((r) => r.get(cacheKey));
+  if (cached) {
+    return ok(res, JSON.parse(cached), "Wishlist (cache)");
+  }
+
+  const wishlist = await Wishlist.findOne({ userId })
+    .populate("items.productId", "title price images stock category")
+    .lean();
+
+  const products = (wishlist?.items || [])
+    .map((i) => i.productId)
+    .filter(Boolean);
+
+  // CACHE SET
+  safeCall((r) =>
+    r.set(cacheKey, JSON.stringify(products), "EX", CACHE_TTL)
+  );
+
+  return ok(res, products, "Wishlist fetched");
 });
 
+// ===============================
+// ADD TO WISHLIST (SAFE)
+// ===============================
 exports.addToWishlist = asyncHandler(async (req, res) => {
   const { productId } = req.body || {};
-  if (!productId) return res.status(400).json({ message: "productId is required" });
+  const userId = req.user._id;
 
-  let wishlist = await Wishlist.findOne({ userId: req.user._id });
-  if (!wishlist) wishlist = await Wishlist.create({ userId: req.user._id, items: [] });
+  if (!productId || !isValidId(productId)) {
+    return fail(res, "Invalid product ID", 400);
+  }
 
-  const already = wishlist.items.some((i) => String(i.productId) === String(productId));
-  if (!already) wishlist.items.push({ productId });
-  await wishlist.save();
+  // Ensure product exists
+  const exists = await Product.findById(productId).select("_id").lean();
+  if (!exists) {
+    return fail(res, "Product not found", 404);
+  }
 
-  const updated = await Wishlist.findOne({ userId: req.user._id }).populate("items.productId").lean();
-  const products = (updated?.items || []).map((i) => i.productId).filter(Boolean);
-  res.json(products);
+  // Prevent overflow
+  const current = await Wishlist.findOne({ userId }).lean();
+  if (current?.items?.length >= MAX_ITEMS) {
+    return fail(res, "Wishlist limit reached", 400);
+  }
+
+  // Atomic update (prevent duplicates by productId)
+  await Wishlist.updateOne(
+    { userId, "items.productId": { $ne: productId } },
+    {
+      $push: {
+        items: {
+          productId,
+          addedAt: new Date(),
+        },
+      },
+    },
+    { upsert: true }
+  );
+
+  // Invalidate cache
+  safeCall((r) => r.del(`wishlist:${userId}`));
+
+  return ok(res, { added: true }, "Added to wishlist");
 });
 
+// ===============================
+// REMOVE FROM WISHLIST
+// ===============================
 exports.removeFromWishlist = asyncHandler(async (req, res) => {
   const { productId } = req.params;
-  if (!productId) return res.status(400).json({ message: "productId is required" });
+  const userId = req.user._id;
 
-  const wishlist = await Wishlist.findOne({ userId: req.user._id });
-  if (!wishlist) return res.json([]);
+  if (!isValidId(productId)) {
+    return fail(res, "Invalid product ID", 400);
+  }
 
-  wishlist.items = wishlist.items.filter((i) => String(i.productId) !== String(productId));
-  await wishlist.save();
+  await Wishlist.updateOne(
+    { userId },
+    { $pull: { items: { productId } } }
+  );
 
-  const updated = await Wishlist.findOne({ userId: req.user._id }).populate("items.productId").lean();
-  const products = (updated?.items || []).map((i) => i.productId).filter(Boolean);
-  res.json(products);
+  // Invalidate cache
+  safeCall((r) => r.del(`wishlist:${userId}`));
+
+  return ok(res, { removed: true }, "Removed from wishlist");
 });
-

@@ -1,9 +1,20 @@
 const asyncHandler = require("express-async-handler");
+const mongoose = require("mongoose");
+
 const { ok, fail } = require("../utils/apiResponse");
 const Offer = require("../models/offer.model");
+
 const { broadcastOffer } = require("../services/notification.service");
 const { broadcastOfferEmail } = require("../services/email.service");
+const { safeCall } = require("../config/redis");
+const { logger } = require("../utils/logger");
 
+const CACHE_KEY = "offers:active";
+const CACHE_TTL = 300; // 5 min
+
+// ===============================
+// STATUS CALCULATOR
+// ===============================
 const calculateStatus = (offer) => {
   const now = new Date();
   const start = new Date(offer.startDate);
@@ -12,112 +23,216 @@ const calculateStatus = (offer) => {
   if (offer.usageLimit > 0 && offer.usedCount >= offer.usageLimit) {
     return "LIMIT ENDED";
   }
-  if (now > end) {
-    return "EXPIRED";
-  }
-  if (now < start) {
-    return "COMING";
-  }
-  if (now >= start && now <= end) {
-    return "ACTIVE";
-  }
-  return "EXPIRED"; // Fallback
+  if (now > end) return "EXPIRED";
+  if (now < start) return "COMING";
+  return "ACTIVE";
 };
 
+// ===============================
+// VALIDATION
+// ===============================
+const validateOffer = (payload) => {
+  if (!payload.title || !String(payload.title).trim()) {
+    return "Offer title required";
+  }
+
+  const start = new Date(payload.startDate);
+  const end = new Date(payload.endDate);
+
+  if (!payload.startDate || !payload.endDate) {
+    return "Start & end date required";
+  }
+
+  if (isNaN(start) || isNaN(end)) {
+    return "Invalid dates";
+  }
+
+  if (end <= start) {
+    return "End date must be greater than start";
+  }
+
+  const discount = Number(payload.discountValue || 0);
+  if (!Number.isFinite(discount) || discount < 0) {
+    return "Invalid discount";
+  }
+
+  if (payload.discountType === "percentage" && discount > 100) {
+    return "Discount > 100% not allowed";
+  }
+
+  return null;
+};
+
+// ===============================
+// GET ACTIVE OFFERS (CACHED)
+// ===============================
 exports.getActiveOffers = asyncHandler(async (_req, res) => {
+  const cached = await safeCall((r) => r.get(CACHE_KEY));
+  if (cached) {
+    return ok(res, JSON.parse(cached), "Offers (cache)");
+  }
+
   const now = new Date();
+
   const offers = await Offer.find({
     isActive: true,
-    endDate: { $gte: now }, // Include 'COMING' and 'ACTIVE'
+    endDate: { $gte: now },
   })
     .sort({ priority: -1 })
+    .select("title image description discountType discountValue startDate endDate usageLimit usedCount couponCode priority")
     .lean();
 
-  const formatted = offers.map(o => ({
+  const formatted = offers.map((o) => ({
     ...o,
-    status: calculateStatus(o)
+    status: calculateStatus(o),
   }));
 
-  return ok(res, formatted, "");
+  // async cache
+  safeCall((r) =>
+    r.set(CACHE_KEY, JSON.stringify(formatted), "EX", CACHE_TTL)
+  );
+
+  return ok(res, formatted, "Offers (db)");
 });
 
-exports.listOffers = asyncHandler(async (_req, res) => {
-  const offers = await Offer.find({}).sort({ createdAt: -1 }).lean();
-  const formatted = offers.map(o => ({
+// ===============================
+// LIST ALL OFFERS (ADMIN)
+// ===============================
+exports.listOffers = asyncHandler(async (req, res) => {
+  if (!req.user || req.user.role !== "admin") {
+    return fail(res, "Unauthorized", 403);
+  }
+
+  const offers = await Offer.find({})
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const formatted = offers.map((o) => ({
     ...o,
-    status: calculateStatus(o)
+    status: calculateStatus(o),
   }));
-  return ok(res, formatted, "");
+
+  return ok(res, formatted);
 });
 
+// ===============================
+// CREATE OFFER (SAFE)
+// ===============================
 exports.createOffer = asyncHandler(async (req, res) => {
+  if (!req.user || req.user.role !== "admin") {
+    return fail(res, "Unauthorized", 403);
+  }
+
   const payload = { ...req.body };
 
-  if (!payload.title || !String(payload.title).trim()) {
-    return fail(res, "Offer title is required", 400);
-  }
-  if (!payload.startDate || !payload.endDate) {
-    return fail(res, "Start and end date are required", 400);
-  }
-  const startDate = new Date(payload.startDate);
-  const endDate = new Date(payload.endDate);
-  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
-    return fail(res, "Invalid offer date", 400);
-  }
-  if (endDate <= startDate) {
-    return fail(res, "End date must be greater than start date", 400);
+  // 📝 PRE-VALIDATION
+  if (!payload.title || !payload.image) {
+    return fail(res, "Title and Image are mandatory", 400);
   }
 
-  payload.discountType = payload.discountType || "percentage";
-  payload.discountValue = Number(payload.discountValue || 0);
-  if (!Number.isFinite(payload.discountValue) || payload.discountValue < 0) {
-    return fail(res, "Invalid discount value", 400);
-  }
-  if (payload.discountType === "percentage" && payload.discountValue > 100) {
-    return fail(res, "Percentage discount cannot exceed 100", 400);
-  }
+  const error = validateOffer(payload);
+  if (error) return fail(res, error, 400);
+
   payload.couponCode = String(payload.couponCode || "").toUpperCase().trim();
-  payload.description = String(payload.description || payload.title || "").trim();
-  payload.startDate = startDate;
-  payload.endDate = endDate;
+
+  // ❗ Duplicate coupon protection
+  if (payload.couponCode) {
+    const exists = await Offer.findOne({ couponCode: payload.couponCode });
+    if (exists) {
+      return fail(res, "Coupon code already exists", 409);
+    }
+  }
+
+  payload.discountValue = Number(payload.discountValue || 0);
+  payload.startDate = new Date(payload.startDate);
+  payload.endDate = new Date(payload.endDate);
   payload.minOrderAmount = Number(payload.minOrderAmount || 0);
-  payload.maxDiscount = (payload.maxDiscount !== "" && payload.maxDiscount !== null) ? Number(payload.maxDiscount) : null;
+  payload.maxDiscount =
+    payload.maxDiscount !== "" && payload.maxDiscount !== null
+      ? Number(payload.maxDiscount)
+      : null;
+
   payload.usageLimit = Number(payload.usageLimit || 0);
-  payload.perUserLimit = Number(payload.perUserLimit || 0);
+  payload.usedCount = 0;
+
   payload.isActive = payload.isActive === true || payload.isActive === "true";
 
   const offer = await Offer.create(payload);
-  await broadcastOffer({ title: "New offer live", body: offer.title });
-  broadcastOfferEmail({ offer }).catch(() => {});
+
+  // invalidate cache
+  safeCall((r) => r.del(CACHE_KEY));
+
+  // async broadcast (non-blocking)
+  if (typeof broadcastOffer === "function") {
+    broadcastOffer({
+      title: "🔥 New Offer Live",
+      body: offer.title,
+    }).catch((e) => logger.warn("Push fail", e));
+  }
+
+  if (typeof broadcastOfferEmail === "function") {
+    broadcastOfferEmail({ offer }).catch((e) => logger.warn("Email fail", e));
+  }
+
   return ok(res, offer, "Offer created", 201);
 });
 
+// ===============================
+// UPDATE OFFER (SAFE)
+// ===============================
 exports.updateOffer = asyncHandler(async (req, res) => {
+  if (!req.user || req.user.role !== "admin") {
+    return fail(res, "Unauthorized", 403);
+  }
+
   const payload = { ...req.body };
-  if (payload.couponCode !== undefined) payload.couponCode = String(payload.couponCode || "").toUpperCase().trim();
+
   if (payload.discountValue !== undefined) {
     payload.discountValue = Number(payload.discountValue || 0);
     if (!Number.isFinite(payload.discountValue) || payload.discountValue < 0) {
-      return fail(res, "Invalid discount value", 400);
-    }
-  }
-  if (payload.minOrderAmount !== undefined) payload.minOrderAmount = Number(payload.minOrderAmount || 0);
-  if (payload.maxDiscount !== undefined) payload.maxDiscount = payload.maxDiscount !== "" && payload.maxDiscount !== null ? Number(payload.maxDiscount) : null;
-  
-  if (payload.startDate !== undefined && payload.endDate !== undefined) {
-    const startDate = new Date(payload.startDate);
-    const endDate = new Date(payload.endDate);
-    if (endDate <= startDate) {
-      return fail(res, "End date must be greater than start date", 400);
+      return fail(res, "Invalid discount", 400);
     }
   }
 
-  const offer = await Offer.findByIdAndUpdate(req.params.id, payload, { new: true });
-  return ok(res, offer, "");
+  if (payload.couponCode !== undefined) {
+    payload.couponCode = String(payload.couponCode).toUpperCase().trim();
+
+    const exists = await Offer.findOne({
+      couponCode: payload.couponCode,
+      _id: { $ne: req.params.id },
+    });
+
+    if (exists) {
+      return fail(res, "Coupon already exists", 409);
+    }
+  }
+
+  const offer = await Offer.findByIdAndUpdate(
+    req.params.id,
+    payload,
+    { new: true }
+  );
+
+  if (!offer) return fail(res, "Offer not found", 404);
+
+  safeCall((r) => r.del(CACHE_KEY));
+
+  return ok(res, offer, "Offer updated");
 });
 
+// ===============================
+// DELETE OFFER
+// ===============================
 exports.deleteOffer = asyncHandler(async (req, res) => {
-  await Offer.findByIdAndDelete(req.params.id);
-  return ok(res, { deleted: true }, "");
-});
+  if (!req.user || req.user.role !== "admin") {
+    return fail(res, "Unauthorized", 403);
+  }
 
+  const deleted = await Offer.findByIdAndDelete(req.params.id);
+
+  if (!deleted) return fail(res, "Offer not found", 404);
+
+  safeCall((r) => r.del(CACHE_KEY));
+
+  return ok(res, { deleted: true });
+});

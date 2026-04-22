@@ -2,7 +2,7 @@ const productRepository = require("../repositories/product.repository");
 const orderRepository = require("../repositories/order.repository");
 const Coupon = require("../models/coupon.model");
 const Offer = require("../models/offer.model");
-const logger = require("../utils/logger");
+const { logger } = require("../utils/logger");
 
 class OrderService {
   async validateCartAndCalculateTotal(products, couponCode = null) {
@@ -189,22 +189,29 @@ class OrderService {
         total: order.total 
       }, null, 2));
 
-      // 4. Finalize coupon usage (if any)
+      // 4. Finalize coupon usage (Atomic check & increment)
       if (couponCode) {
         const code = couponCode.toUpperCase().trim();
-        await Coupon.updateOne(
-          { code },
+        
+        // Atomic attempt to claim a coupon slot
+        let couponUpdate = await Coupon.findOneAndUpdate(
+          { code, $or: [{ usageLimit: 0 }, { $expr: { $lt: ["$usedCount", "$usageLimit"] } }] },
           { $inc: { usedCount: 1 } },
-          { session }
-        ).then(async (res) => {
-          if (res.matchedCount === 0) {
-            await Offer.updateOne(
-              { couponCode: code },
-              { $inc: { usedCount: 1 } },
-              { session }
-            );
-          }
-        });
+          { session, new: true }
+        );
+
+        // If not found in Coupons, stay within same transaction and try Offers
+        if (!couponUpdate) {
+          couponUpdate = await Offer.findOneAndUpdate(
+            { couponCode: code, isActive: true, $or: [{ usageLimit: 0 }, { $expr: { $lt: ["$usedCount", "$usageLimit"] } }] },
+            { $inc: { usedCount: 1 } },
+            { session, new: true }
+          );
+        }
+
+        if (!couponUpdate) {
+          throw new Error("Coupon usage limit reached or coupon deactivated during processing.");
+        }
       }
 
       await session.commitTransaction();
@@ -218,28 +225,32 @@ class OrderService {
     }
   }
 
-  async finalizeCouponUsage(couponCode) {
+  async finalizeCouponUsage(couponCode, session = null) {
     if (!couponCode) return;
     try {
       const code = couponCode.toUpperCase().trim();
+      const options = session ? { session } : {};
       
       // Try to update Coupon first
       const couponUpdate = await Coupon.updateOne(
         { code },
-        { $inc: { usedCount: 1 } }
+        { $inc: { usedCount: 1 } },
+        options
       );
 
       // If not a coupon, try to update Offer
       if (couponUpdate.matchedCount === 0) {
         await Offer.updateOne(
           { couponCode: code },
-          { $inc: { usedCount: 1 } }
+          { $inc: { usedCount: 1 } },
+          options
         );
       }
     } catch (err) {
       logger.error(`Failed to increment usage for ${couponCode}: ${err.message}`);
     }
   }
+
 }
 
 module.exports = new OrderService();

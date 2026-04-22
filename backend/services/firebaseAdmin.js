@@ -1,31 +1,55 @@
+// config/firebase.js
+
 const admin = require("firebase-admin");
+const { logger } = require("../utils/logger");
 
 function parseServiceKey(raw) {
   if (!raw) return null;
-  if (typeof raw === "object") return raw;
+
   try {
+    if (typeof raw === "object") return raw;
     return JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    logger.error("[Firebase] Invalid service key JSON");
     return null;
   }
 }
 
-function initFirebaseAdmin() {
-  if (admin.apps && admin.apps.length > 0) return admin;
+function validateServiceKey(key) {
+  return (
+    key &&
+    key.project_id &&
+    key.private_key &&
+    key.client_email
+  );
+}
 
-  const serviceKey = parseServiceKey(process.env.FIREBASE_SERVICE_KEY);
-  if (!serviceKey) {
-    // Allow server to boot without Firebase for non-notification paths.
-    // Endpoints that need Firebase should handle missing config.
+function initFirebaseAdmin() {
+  if (admin.apps.length > 0) {
     return admin;
   }
 
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceKey),
-  });
+  const serviceKey = parseServiceKey(process.env.FIREBASE_SERVICE_KEY);
 
-  return admin;
+  if (!validateServiceKey(serviceKey)) {
+    logger.warn("[Firebase] Not initialized (missing/invalid config)");
+    return null; // ⚠️ return null instead of broken admin
+  }
+
+  try {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceKey),
+    });
+
+    logger.info("[Firebase] Initialized successfully");
+    return admin;
+
+  } catch (err) {
+    logger.error("[Firebase] Initialization failed:", err.message);
+    return null;
+  }
 }
 
-module.exports = { admin: initFirebaseAdmin() };
+const firebaseAdmin = initFirebaseAdmin();
 
+module.exports = { firebaseAdmin };

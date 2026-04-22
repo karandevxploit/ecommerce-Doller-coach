@@ -1,95 +1,87 @@
 const Config = require("../models/config.model");
 const asyncHandler = require("express-async-handler");
 const { ok, fail } = require("../utils/apiResponse");
-const cloudinary = require("../config/cloudinary");
-const redis = require("../config/redis");
-const logger = require("../utils/logger");
+const { safeCall } = require("../config/redis"); // ✅ use safe wrapper
+const { logger } = require("../utils/logger");
 
 const CACHE_KEY = "app:config";
+const CACHE_TTL = 3600; // 1 hour
 
-/**
- * Public: Get configuration (Cached)
- */
+// ===============================
+// DEFAULT FALLBACK CONFIG
+// ===============================
+const DEFAULT_CONFIG = Object.freeze({
+  company_name: "Doller Coach",
+  email: "",
+  phone: "",
+  gst: "",
+  address: "",
+});
+
+// ===============================
+// GET CONFIG (CACHE SAFE)
+// ===============================
 exports.getConfig = asyncHandler(async (req, res) => {
   try {
-    // 1. Check Redis Cache
-    const cachedConfig = await redis.get(CACHE_KEY);
-    if (cachedConfig) {
-      return ok(res, JSON.parse(cachedConfig), "Config fetched from cache");
+    // 1. Try Redis (safe)
+    const cached = await safeCall((r) => r.get(CACHE_KEY));
+    if (cached) {
+      return ok(res, JSON.parse(cached), "Config (cache)");
     }
 
-    // 2. Fetch from DB
+    // 2. DB fallback
     const config = await Config.findOne().lean();
-    const result = config || { 
-      company_name: "Doller Coach", 
-      email: "", 
-      phone: "", 
-      gst: "", 
-      address: "", 
-      logo: "" 
-    };
+    const result = config || DEFAULT_CONFIG;
 
-    // 3. Populate Cache
-    await redis.setex(CACHE_KEY, 3600, JSON.stringify(result)); // 1 hour TTL
+    // 3. Cache (non-blocking)
+    safeCall((r) =>
+      r.set(CACHE_KEY, JSON.stringify(result), "EX", CACHE_TTL)
+    );
 
-    return ok(res, result, "Config fetched from DB");
+    return ok(res, result, "Config (db)");
   } catch (err) {
-    logger.error("Error fetching config:", err);
-    return fail(res, "Internal Server Error", 500);
+    logger.error("[CONFIG_GET_ERROR]", { message: err.message });
+
+    // graceful fallback (NEVER break UI)
+    return ok(res, DEFAULT_CONFIG, "Fallback config");
   }
 });
 
-/**
- * Admin: Update configuration text fields
- */
+// ===============================
+// UPDATE CONFIG (SAFE + VALIDATED)
+// ===============================
 exports.updateConfig = asyncHandler(async (req, res) => {
-  const { company_name, phone, email, gst, address } = req.body;
-  
-  let config = await Config.findOne();
-  if (!config) config = new Config();
+  const { company_name, phone, email, gst, address } = req.body || {};
 
-  if (company_name) config.company_name = company_name;
-  if (phone) config.phone = phone;
-  if (email) config.email = email;
-  if (gst) config.gst = gst;
-  if (address) config.address = address;
-
-  await config.save();
-  await redis.del(CACHE_KEY); // Invalidate cache
-
-  return ok(res, config, "Configuration updated");
-});
-
-/**
- * Admin: Upload logo to Cloudinary and update DB
- */
-exports.uploadLogo = asyncHandler(async (req, res) => {
-  if (!req.file) return fail(res, "No logo file provided", 400);
-
-  try {
-    const b64 = req.file.buffer.toString("base64");
-    const dataUri = `data:${req.file.mimetype};base64,${b64}`;
-    
-    // Upload to Cloudinary
-    const result = await cloudinary.uploader.upload(dataUri, {
-      folder: "assets",
-      public_id: "brand_logo",
-      overwrite: true,
-      resource_type: "image",
-    });
-
-    // Update config in DB
-    let config = await Config.findOne();
-    if (!config) config = new Config();
-    
-    config.logo = result.secure_url;
-    await config.save();
-    
-    await redis.del(CACHE_KEY); // Invalidate cache
-
-    return ok(res, { logo: config.logo }, "Logo updated successfully");
-  } catch (err) {
-    logger.error("Logo Upload Error:", err);
-    return fail(res, err.message || "Failed to upload logo", 500);
+  // 1. Basic validation (fast fail)
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return fail(res, "Invalid email format", 400);
   }
+
+  if (phone && !/^[0-9]{10}$/.test(phone)) {
+    return fail(res, "Invalid phone number", 400);
+  }
+
+  // 2. Atomic upsert
+  const updated = await Config.findOneAndUpdate(
+    {},
+    {
+      $set: {
+        ...(company_name && { company_name }),
+        ...(phone && { phone }),
+        ...(email && { email }),
+        ...(gst && { gst }),
+        ...(address && { address }),
+      },
+    },
+    {
+      new: true,
+      upsert: true,
+    }
+  );
+
+  // 3. Cache invalidation (safe)
+  safeCall((r) => r.del(CACHE_KEY));
+
+  return ok(res, updated, "Configuration updated");
 });

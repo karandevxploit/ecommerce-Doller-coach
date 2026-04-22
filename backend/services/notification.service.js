@@ -1,6 +1,7 @@
 const Notification = require("../models/notification.model");
 const User = require("../models/user.model");
 const { admin } = require("./firebaseAdmin");
+const realtimeService = require("./realtime.service");
 
 async function sendFcmToToken({ token, title, body, type }) {
   if (!token) return;
@@ -28,6 +29,11 @@ exports.createNotification = async ({
   if (userId && audience !== "admin") {
     const u = await User.findById(userId).select("fcmToken").lean();
     await sendFcmToToken({ token: u?.fcmToken, title, body, type });
+  }
+
+  // Real-time synchronization for Admins
+  if (audience === "admin") {
+    realtimeService.notifyAdminNotification({ _id: created._id, title, body, type });
   }
 
   return created;
@@ -60,13 +66,16 @@ exports.broadcastOffer = async ({ title, body }) => {
 const { notificationQueue } = require("./queue.service");
 
 exports.notifyAdminsImmediate = async ({ title, body, type = "system" }) => {
-  await Notification.create({
+  const created = await Notification.create({
     userId: null,
     audience: "admin",
     title,
     body,
     type,
   });
+
+  // Instant socket blast to active admin nodes
+  realtimeService.notifyAdminNotification({ _id: created._id, title, body, type });
 };
 
 exports.notifyAdmins = async ({ title, body, type = "system" }) => {
