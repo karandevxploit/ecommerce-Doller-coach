@@ -40,10 +40,13 @@ export default function Offers() {
     try {
       setLoading(true);
       const res = await api.get("/admin/offers");
-      const data = res.data || res || [];
+      
+      // ✅ Properly unwrap the standard API envelope
+      const rawPayload = res?.data?.data || res?.data || res || [];
+      
       setOffers(
-        Array.isArray(data)
-          ? data.map(mapOffer).map((o, i) => ({ ...o, raw: data[i] }))
+        Array.isArray(rawPayload)
+          ? rawPayload.map(mapOffer).map((o, i) => ({ ...o, raw: rawPayload[i] }))
           : []
       );
     } catch (err) {
@@ -168,7 +171,8 @@ export default function Offers() {
       setFormOpen(false);
       fetchOffers();
     } catch (err) {
-      toast.error(err?.response?.data?.message || "Save Failure");
+      console.error("OFFER_SAVE_ERROR:", err.response?.data || err.message);
+      toast.error(err?.response?.data?.message || err?.message || "Save Failure");
     } finally {
       setSaving(false);
     }

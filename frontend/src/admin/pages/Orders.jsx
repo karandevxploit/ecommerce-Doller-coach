@@ -15,9 +15,9 @@ export default function Orders() {
   const fetchOrders = async () => {
     try {
       setLoading(true);
-      const data = await api.get("/admin/orders");
-      // Log removed for production
-      const mapped = Array.isArray(data) ? data.map(mapOrder) : [];
+      const res = await api.get("/admin/orders");
+      const rawPayload = res?.data?.data || res?.data || res || [];
+      const mapped = Array.isArray(rawPayload) ? rawPayload.map(mapOrder) : [];
       setOrders(mapped);
     } catch (err) {
       console.error("ORDERS FETCH ERROR:", err.response?.data || err.message);

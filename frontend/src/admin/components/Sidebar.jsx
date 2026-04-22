@@ -4,13 +4,13 @@ import {
   Package,
   ShoppingCart,
   Users,
+  Layout,
   Tag,
   MessageSquare,
-  Zap,
-  Box,
   Settings
 } from "lucide-react";
 import { useConfigStore } from "../../store/configStore";
+import logo from "@/assets/logo.png";
 
 export default function Sidebar({ onNavigate }) {
   const location = useLocation();
@@ -21,9 +21,9 @@ export default function Sidebar({ onNavigate }) {
     { name: "Items", path: "/admin/products", icon: Package },
     { name: "Purchases", path: "/admin/orders", icon: ShoppingCart },
     { name: "Customers", path: "/admin/users", icon: Users },
+    { name: "Site Layout", path: "/admin/site-content", icon: Layout },
     { name: "Offers", path: "/admin/offers", icon: Tag },
     { name: "Reviews", path: "/admin/reviews", icon: MessageSquare },
-    { name: "System Health", path: "/admin/performance", icon: Zap },
   ];
 
   return (
@@ -36,13 +36,7 @@ export default function Sidebar({ onNavigate }) {
           className="flex items-center gap-3 transition-opacity hover:opacity-80"
           onClick={onNavigate}
         >
-          {config?.logo ? (
-            <img src={config.logo} alt="brand" className="h-8 w-auto object-contain" />
-          ) : (
-            <div className="h-8 w-8 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-sm font-black italic">
-               D
-            </div>
-          )}
+          <img src={logo} alt="brand" className="h-8 w-auto object-contain" />
           <span className="text-base font-bold text-gray-900 tracking-tight uppercase">
              {config?.company_name || "Doller Coach"}
           </span>

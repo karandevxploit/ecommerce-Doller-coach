@@ -1,18 +1,53 @@
-export const categoryData = {
-  WOMEN: {
-    Topwear: ["Tops (Crop, Casual, Formal)", "T-Shirts", "Shirts", "Tunics"],
-    Bottomwear: ["Jeans (High Waist, Skinny, Wide Leg)", "Trousers", "Skirts", "Shorts"],
-    Dresses: ["Casual Dresses", "Party Dresses", "Bodycon", "Maxi / Midi"],
-    Outerwear: ["Jackets", "Shrugs", "Coats", "Hoodies"],
-    "Ethnic Wear": ["Kurtis", "Sarees", "Lehenga", "Salwar Suits"],
-    "Innerwear & Sleepwear": ["Lingerie", "Nightwear"],
-    Activewear: ["Gym Wear", "Yoga Pants", "Sports Bras"],
+export const categoryData = [
+  {
+    id: "women",
+    label: "Women",
+    children: [
+      {
+        id: "topwear",
+        label: "Topwear",
+        children: [
+          { id: "tops", label: "Tops", tags: ["crop", "casual", "formal"] },
+          { id: "tshirts", label: "T-Shirts" },
+          { id: "shirts", label: "Shirts" },
+          { id: "tunics", label: "Tunics" }
+        ]
+      },
+      {
+        id: "bottomwear",
+        label: "Bottomwear",
+        children: [
+          { id: "jeans", label: "Jeans", tags: ["high-waist", "skinny", "wide-leg"] },
+          { id: "trousers", label: "Trousers" },
+          { id: "skirts", label: "Skirts" },
+          { id: "shorts", label: "Shorts" }
+        ]
+      },
+      {
+        id: "ethnic",
+        label: "Ethnic Wear",
+        children: [
+          { id: "kurtis", label: "Kurtis" },
+          { id: "sarees", label: "Sarees" },
+          { id: "lehenga", label: "Lehenga" },
+          { id: "salwar", label: "Salwar Suits" }
+        ]
+      }
+    ]
   },
-  MEN: {
-    Topwear: ["T-Shirts (Oversized, Graphic, Plain)", "Shirts (Casual, Formal, Linen)", "Hoodies & Sweatshirts", "Jackets & Coats", "Blazers"],
-    Bottomwear: ["Jeans (Slim, Regular, Baggy)", "Trousers (Formal, Chinos)", "Shorts", "Joggers / Track Pants"],
-    "Ethnic Wear": ["Kurtas", "Kurta Sets", "Sherwani", "Nehru Jackets"],
-    "Innerwear & Sleepwear": ["Vests", "Boxers", "Night Suits"],
-    Activewear: ["Gym T-Shirts", "Track Pants", "Compression Wear"],
-  },
-};
+  {
+    id: "men",
+    label: "Men",
+    children: [
+      {
+        id: "topwear",
+        label: "Topwear",
+        children: [
+          { id: "tshirts", label: "T-Shirts", tags: ["oversized", "graphic", "plain"] },
+          { id: "shirts", label: "Shirts", tags: ["casual", "formal", "linen"] },
+          { id: "hoodies", label: "Hoodies & Sweatshirts" }
+        ]
+      }
+    ]
+  }
+];
