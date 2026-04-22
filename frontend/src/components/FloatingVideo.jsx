@@ -1,29 +1,51 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { X } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 
+/**
+ * FloatingVideo
+ * Product preview video with controlled visibility + UX improvements
+ */
 const FloatingVideo = ({ videoUrl }) => {
   const { id } = useParams();
-  const [visible, setVisible] = useState(false);
+  const prefersReducedMotion = useReducedMotion();
 
-  // Smart Visibility Control:
-  // Reset visibility whenever the product ID changes (user opens another product or re-opens same)
+  const [visible, setVisible] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const videoRef = useRef(null);
+  const timerRef = useRef(null);
+
+  /* ---------------- VISIBILITY ---------------- */
   useEffect(() => {
-    if (videoUrl && id) {
-      const timer = setTimeout(() => setVisible(true), 1200);
-      return () => {
-        clearTimeout(timer);
-        setVisible(false);
-      };
-    }
+    if (!videoUrl || !id) return;
+
+    clearTimeout(timerRef.current);
+
+    timerRef.current = setTimeout(() => {
+      setVisible(true);
+    }, 1000);
+
+    return () => {
+      clearTimeout(timerRef.current);
+      setVisible(false);
+    };
   }, [id, videoUrl]);
+
+  /* ---------------- VIDEO CONTROL ---------------- */
+  useEffect(() => {
+    if (!videoRef.current) return;
+
+    if (isHovered) {
+      videoRef.current.pause();
+    } else {
+      videoRef.current.play().catch(() => { });
+    }
+  }, [isHovered]);
 
   const handleClose = (e) => {
     e.stopPropagation();
     setVisible(false);
-    // Note: We use local state (visible) so it persists only while on this view.
-    // Navigation to another product (changing 'id') will reset it.
   };
 
   if (!videoUrl) return null;
@@ -32,91 +54,44 @@ const FloatingVideo = ({ videoUrl }) => {
     <AnimatePresence>
       {visible && (
         <motion.div
-          initial={{ opacity: 0, scale: 0.8, y: 30 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.8, y: 30 }}
-          className="floating-product-video-container"
-          style={{
-            position: "fixed",
-            bottom: "24px",
-            right: "24px",
-            width: "180px",
-            aspectRatio: "9/16",
-            zIndex: 9999,
-            borderRadius: "20px",
-            overflow: "hidden",
-            boxShadow: "0 20px 50px rgba(0,0,0,0.5)",
-            background: "#000",
-            border: "1px solid rgba(255,255,255,0.15)",
-            cursor: "pointer"
-          }}
+          initial={prefersReducedMotion ? false : { opacity: 0, y: 20, scale: 0.9 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 20, scale: 0.9 }}
+          transition={{ duration: 0.3 }}
+          role="dialog"
+          aria-label="Product preview video"
+          className="fixed bottom-20 md:bottom-6 right-4 md:right-6 w-[160px] md:w-[180px] aspect-[9/16] z-[9999] rounded-xl overflow-hidden bg-black border border-white/10 shadow-xl"
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
         >
-          {/* Close Button */}
+          {/* Close */}
           <button
             onClick={handleClose}
-            className="group"
-            style={{
-              position: "absolute",
-              top: "10px",
-              right: "10px",
-              zIndex: 10,
-              background: "rgba(0,0,0,0.4)",
-              backdropFilter: "blur(8px)",
-              color: "#fff",
-              border: "1px solid rgba(255,255,255,0.2)",
-              borderRadius: "50%",
-              width: "32px",
-              height: "32px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              cursor: "pointer",
-              transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
-            }}
+            aria-label="Close video"
+            className="absolute top-2 right-2 z-10 w-8 h-8 flex items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 transition"
           >
-            <X size={16} strokeWidth={3} className="group-hover:scale-110 transition-transform" />
+            <X size={16} />
           </button>
 
-          {/* Video Element */}
+          {/* Video */}
           <video
+            ref={videoRef}
             src={videoUrl}
-            autoPlay
             muted
             loop
             playsInline
-            style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-              pointerEvents: "none"
-            }}
+            autoPlay
+            preload="metadata"
+            className="w-full h-full object-cover"
           />
 
-          {/* Subtle Overlay Gradient for Depth */}
-          <div style={{
-            position: "absolute",
-            inset: 0,
-            background: "linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 50%)",
-            pointerEvents: "none"
-          }} />
-          
-          <div style={{
-            position: "absolute",
-            bottom: "12px",
-            left: "0",
-            right: "0",
-            textAlign: "center",
-            pointerEvents: "none"
-          }}>
-            <span style={{ 
-              fontSize: "9px", 
-              fontWeight: "900", 
-              color: "rgba(255,255,255,0.6)", 
-              textTransform: "uppercase", 
-              letterSpacing: "0.15em",
-              textShadow: "0 2px 4px rgba(0,0,0,0.5)"
-            }}>
-              Product Showcase
+          {/* Overlay */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
+
+          {/* Label */}
+          <div className="absolute bottom-2 w-full text-center pointer-events-none">
+            <span className="text-[10px] text-white/70 font-medium">
+              Product preview
             </span>
           </div>
         </motion.div>
@@ -125,4 +100,4 @@ const FloatingVideo = ({ videoUrl }) => {
   );
 };
 
-export default FloatingVideo;
+export default React.memo(FloatingVideo);

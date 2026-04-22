@@ -1,16 +1,17 @@
-import { useState, useRef, useEffect } from "react";
-import { Bell, CheckCircle2, Inbox } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Bell, Inbox } from "lucide-react";
 import toast from "react-hot-toast";
 import { api } from "../api/client";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 
 export default function NotificationsDropdown() {
-  void motion;
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(false);
   const dropdownRef = useRef(null);
+  const prefersReducedMotion = useReducedMotion();
 
+  /* ---------------- CLICK OUTSIDE ---------------- */
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
@@ -21,24 +22,28 @@ export default function NotificationsDropdown() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const fetchNotifications = async () => {
+  /* ---------------- FETCH ---------------- */
+  const fetchNotifications = useCallback(async () => {
     setLoading(true);
     try {
       const data = await api.get("/notifications/my");
-      setNotifications(Array.isArray(data) ? data : []);
-    } catch (err) {
-      toast.error("Failed to load notifications");
+      const safe = Array.isArray(data) ? data : data?.notifications || [];
+      setNotifications(safe);
+    } catch {
+      toast.error("Unable to load notifications");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (isOpen) fetchNotifications();
-  }, [isOpen]);
+  }, [isOpen, fetchNotifications]);
 
+  /* ---------------- DERIVED ---------------- */
   const unreadCount = notifications.filter((n) => !n.readAt).length;
 
+  /* ---------------- ACTIONS ---------------- */
   const markAsRead = async (id) => {
     try {
       await api.post(`/notifications/read/${id}`);
@@ -49,23 +54,47 @@ export default function NotificationsDropdown() {
             : n
         )
       );
-    } catch (err) {
-      toast.error("Failed to mark as read");
+    } catch {
+      toast.error("Could not update notification");
+    }
+  };
+
+  const markAllAsRead = async () => {
+    try {
+      await api.post("/notifications/read/all");
+      setNotifications((prev) =>
+        prev.map((n) => ({
+          ...n,
+          readAt: new Date().toISOString()
+        }))
+      );
+      toast.success("All notifications cleared");
+    } catch {
+      toast.error("Action failed");
+    }
+  };
+
+  const formatDate = (date) => {
+    try {
+      return new Date(date).toLocaleDateString();
+    } catch {
+      return "";
     }
   };
 
   return (
     <div className="relative" ref={dropdownRef}>
-      
+
       {/* Bell */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="relative h-10 w-10 flex items-center justify-center rounded-lg bg-[#f1f5f9] border border-gray-100 text-[#0f172a]/60 hover:text-[#0f172a] hover:bg-[#F2F2F2] transition-all"
+        onClick={() => setIsOpen((prev) => !prev)}
+        aria-label="Open notifications"
+        className="relative h-10 w-10 flex items-center justify-center rounded-lg bg-slate-100 border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-200 transition"
       >
         <Bell size={18} />
 
         {unreadCount > 0 && (
-          <span className="absolute top-2 right-2 h-2 w-2 bg-[#1e3a8a] rounded-full shadow-sm" />
+          <span className="absolute top-1.5 right-1.5 h-2 w-2 bg-indigo-600 rounded-full" />
         )}
       </button>
 
@@ -73,20 +102,24 @@ export default function NotificationsDropdown() {
       <AnimatePresence>
         {isOpen && (
           <motion.div
-            initial={{ opacity: 0, y: 10, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 10, scale: 0.98 }}
-            className="absolute right-0 mt-3 w-80 md:w-96 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden z-[100]"
+            initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+            transition={{ duration: 0.2 }}
+            role="dialog"
+            aria-label="Notifications"
+            className="absolute right-0 mt-3 w-80 md:w-96 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-[100]"
           >
-            
+
             {/* Header */}
-            <div className="px-5 py-4 border-b border-gray-100 flex justify-between items-center">
-              <h3 className="text-[11px] font-black text-[#0f172a] uppercase tracking-widest">
+            <div className="px-4 py-3 border-b border-slate-100 flex justify-between items-center">
+              <h3 className="text-sm font-semibold text-slate-900">
                 Notifications
               </h3>
+
               {unreadCount > 0 && (
-                <span className="px-4 py-2 text-sm rounded-lg bg-[#0f172a] text-white hover:scale-[1.02] shadow-sm transition-all">
-                  {unreadCount} NEW
+                <span className="text-xs text-indigo-600 font-medium">
+                  {unreadCount} new
                 </span>
               )}
             </div>
@@ -95,36 +128,37 @@ export default function NotificationsDropdown() {
             <div className="max-h-[400px] overflow-y-auto">
 
               {loading ? (
-                <div className="p-10 flex justify-center">
-                  <div className="h-6 w-6 border-2 border-gray-200 border-t-black animate-spin rounded-full" />
+                <div className="p-8 flex justify-center">
+                  <div className="h-5 w-5 border-2 border-slate-300 border-t-slate-900 animate-spin rounded-full" />
                 </div>
               ) : notifications.length === 0 ? (
-                <div className="p-10 text-center text-gray-400">
-                  <Inbox size={32} className="mx-auto mb-3" />
-                  No notifications
+                <div className="p-8 text-center text-slate-400">
+                  <Inbox size={28} className="mx-auto mb-2" />
+                  <p className="text-sm">No notifications yet</p>
                 </div>
               ) : (
-                <div className="divide-y divide-gray-100">
+                <div className="divide-y divide-slate-100">
                   {notifications.map((n) => (
-                    <div
+                    <button
                       key={n._id}
                       onClick={() => markAsRead(n._id)}
-                      className={`px-5 py-4 cursor-pointer transition-all ${
-                        !n.readAt
-                          ? "bg-[#1e3a8a]/5 hover:bg-[#1e3a8a]/10 border-l-2 border-[#1e3a8a]"
-                          : "hover:bg-[#f1f5f9] border-l-2 border-transparent"
-                      }`}
+                      className={`w-full text-left px-4 py-3 transition ${!n.readAt
+                          ? "bg-indigo-50 hover:bg-indigo-100"
+                          : "hover:bg-slate-50"
+                        }`}
                     >
-                      <p className={`text-[11px] font-black uppercase tracking-tight ${!n.readAt ? "text-[#0f172a]" : "text-gray-400"}`}>
-                        {n.title}
+                      <p className="text-sm font-medium text-slate-900">
+                        {n.title || "Update"}
                       </p>
-                      <p className="text-[9px] text-gray-400 font-medium mt-1 line-clamp-2 uppercase tracking-wide">
-                        {n.body}
+
+                      <p className="text-xs text-slate-500 mt-1 line-clamp-2">
+                        {n.body || ""}
                       </p>
-                      <p className="text-[8px] text-gray-300 font-black mt-2 uppercase tracking-widest">
-                        {new Date(n.createdAt).toLocaleDateString()}
+
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        {formatDate(n.createdAt)}
                       </p>
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}
@@ -132,24 +166,11 @@ export default function NotificationsDropdown() {
 
             {/* Footer */}
             <button
-              onClick={async () => {
-                try {
-                  await api.post("/notifications/read/all");
-                  setNotifications((prev) =>
-                    prev.map((n) => ({
-                      ...n,
-                      readAt: new Date().toISOString(),
-                    }))
-                  );
-                  toast.success("Iduser Saveed");
-                } catch (err) {
-                  toast.error("Save Failed");
-                }
-              }}
+              onClick={markAllAsRead}
               disabled={unreadCount === 0}
-              className="w-full py-3 text-[10px] font-black text-[#0f172a] uppercase tracking-widest hover:bg-[#1e3a8a] transition-all disabled:opacity-30 border-t border-gray-100"
+              className="w-full py-3 text-sm font-medium text-slate-700 border-t border-slate-100 hover:bg-slate-50 disabled:opacity-40"
             >
-              Clear All Updates
+              Mark all as read
             </button>
           </motion.div>
         )}

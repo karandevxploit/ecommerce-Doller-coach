@@ -1,71 +1,86 @@
 import { useState } from "react";
-import { Plus, X, ChevronDown, ChevronUp, Sparkles } from "lucide-react";
+import { Plus, X, ChevronDown, ChevronUp } from "lucide-react";
 import CouponCard from "../ui/CouponCard";
+import toast from "react-hot-toast";
 
-export default function CouponSection({ code, setCode, onApply, onRemove, isApplied, isLoading,  availableCoupons = [] }) {
+export default function CouponSection({
+  code,
+  setCode,
+  onApply,
+  onRemove,
+  isApplied,
+  isLoading,
+  availableCoupons = [],
+}) {
   const [showOffers, setShowOffers] = useState(false);
 
-  const activeCoupons = (availableCoupons || []).filter(c => c.status === "active");
-  const upcomingCoupons = (availableCoupons || []).filter(c => c.status === "upcoming");
+  const activeCoupons = availableCoupons.filter((c) => c.status === "active");
+  const upcomingCoupons = availableCoupons.filter((c) => c.status === "upcoming");
+
+  const handleApply = () => {
+    if (!code.trim()) {
+      return toast.error("Please enter a coupon code");
+    }
+    onApply(code);
+  };
 
   return (
-    <div className="bg-white border border-gray-100 rounded-2xl p-5 space-y-4 shadow-sm group hover:border-[#0f172a] transition-all">
-      <div className="flex items-center justify-between pl-1">
-        <div className="flex items-center gap-2">
-          <div className="h-1 w-8 bg-[#0f172a] rounded-full group-hover:w-12 transition-all" />
-          <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest leading-none">Promotion Key</span>
-        </div>
-        
+    <div className="bg-white border rounded-xl p-5 space-y-4 shadow-sm">
+
+      {/* HEADER */}
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold">Apply Coupon</h3>
+
         {!isApplied && (activeCoupons.length > 0 || upcomingCoupons.length > 0) && (
-          <button 
+          <button
             onClick={() => setShowOffers(!showOffers)}
-            className="flex items-center gap-1 text-[9px] font-black text-[#1e3a8a] bg-[#1e3a8a]/5 px-2 py-1 rounded-lg uppercase tracking-widest hover:bg-[#1e3a8a] hover:text-white transition-all shadow-sm"
+            className="text-xs text-blue-600 flex items-center gap-1"
           >
-            {showOffers ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-            {showOffers ? "Hide Logic" : "View Manifests"}
+            {showOffers ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            {showOffers ? "Hide offers" : "View offers"}
           </button>
         )}
       </div>
 
+      {/* OFFERS LIST */}
       {!isApplied && showOffers && (
-        <div className="space-y-6 py-2 animate-in slide-in-from-top-4 duration-300">
-          {/* ACTIVE SECTION */}
+        <div className="space-y-4">
+
+          {/* ACTIVE */}
           {activeCoupons.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 px-1">
-                <div className="h-px flex-1 bg-green-100" />
-                <span className="text-[8px] font-black text-green-600 uppercase tracking-widest">Live Manifests</span>
-                <div className="h-px flex-1 bg-green-100" />
-              </div>
-              <div className="grid grid-cols-1 gap-3 max-h-[300px] overflow-y-auto pr-1">
+            <div>
+              <p className="text-xs font-semibold text-green-600 mb-2">
+                Available Offers
+              </p>
+
+              <div className="space-y-2 max-h-52 overflow-y-auto">
                 {activeCoupons.map((coupon) => (
-                  <CouponCard 
-                    key={coupon.id || coupon._id} 
-                    coupon={coupon} 
+                  <CouponCard
+                    key={coupon.id || coupon._id}
+                    coupon={coupon}
                     onApply={(c) => {
                       setCode(c);
                       onApply(c);
                       setShowOffers(false);
-                    }} 
+                    }}
                   />
                 ))}
               </div>
             </div>
           )}
 
-          {/* UPCOMING SECTION */}
+          {/* UPCOMING */}
           {upcomingCoupons.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 px-1">
-                <div className="h-px flex-1 bg-amber-100" />
-                <span className="text-[8px] font-black text-amber-600 uppercase tracking-widest">Upcoming Sequences</span>
-                <div className="h-px flex-1 bg-amber-100" />
-              </div>
-              <div className="grid grid-cols-1 gap-3 max-h-[300px] overflow-y-auto pr-1">
+            <div>
+              <p className="text-xs font-semibold text-orange-500 mb-2">
+                Coming Soon
+              </p>
+
+              <div className="space-y-2 max-h-52 overflow-y-auto opacity-60">
                 {upcomingCoupons.map((coupon) => (
-                  <CouponCard 
-                    key={coupon.id || coupon._id} 
-                    coupon={coupon} 
+                  <CouponCard
+                    key={coupon.id || coupon._id}
+                    coupon={coupon}
                   />
                 ))}
               </div>
@@ -73,44 +88,46 @@ export default function CouponSection({ code, setCode, onApply, onRemove, isAppl
           )}
 
           {activeCoupons.length === 0 && upcomingCoupons.length === 0 && (
-            <div className="py-8 text-center bg-gray-50 rounded-xl border border-dashed border-gray-200">
-               <p className="text-[10px] font-black uppercase tracking-widest text-gray-300">No offers available right now</p>
-            </div>
+            <p className="text-center text-sm text-gray-400 py-6">
+              No offers available right now
+            </p>
           )}
         </div>
       )}
 
+      {/* INPUT */}
       <div className="relative">
         <input
           type="text"
-          placeholder="ENTER DISCOUNT CODE"
+          placeholder="Enter coupon code"
           value={code}
           onChange={(e) => setCode(e.target.value.toUpperCase())}
           disabled={isApplied || isLoading}
-          className="w-full h-12 pl-5 pr-28 bg-gray-50 border border-transparent rounded-xl text-xs font-black tracking-widest outline-none focus:bg-white focus:border-[#0f172a] transition-all uppercase placeholder:text-gray-200 disabled:opacity-50"
+          className="w-full h-11 px-4 pr-28 border rounded-lg text-sm outline-none focus:border-black"
         />
+
         {!isApplied ? (
           <button
-            onClick={() => onApply(code)}
-            disabled={isLoading || !code.trim()}
-            className="absolute right-1 top-1 bottom-1 px-5 bg-[#1e3a8a] text-white rounded-lg text-[9px] font-black uppercase tracking-[0.2em] hover:bg-black transition-all disabled:opacity-30 disabled:hover:scale-100 shadow-md flex items-center justify-center"
+            onClick={handleApply}
+            disabled={isLoading}
+            className="absolute right-1 top-1 bottom-1 px-4 bg-black text-white rounded-lg text-sm flex items-center gap-1 disabled:opacity-40"
           >
-            {isLoading ? "..." : <><Plus size={14} strokeWidth={4} className="mr-1" /> VALIDATE</>}
+            {isLoading ? "Applying..." : "Apply"}
           </button>
         ) : (
           <button
             onClick={onRemove}
-            className="absolute right-1 top-1 bottom-1 px-5 bg-red-50 text-red-500 rounded-lg text-[9px] font-black uppercase tracking-[0.2em] hover:bg-red-100 transition-all flex items-center justify-center border border-red-100"
+            className="absolute right-1 top-1 bottom-1 px-4 bg-red-100 text-red-600 rounded-lg text-sm flex items-center gap-1"
           >
-            <X size={14} strokeWidth={4} className="mr-1" /> EXTINGUISH
+            <X size={14} /> Remove
           </button>
         )}
       </div>
 
+      {/* SUCCESS */}
       {isApplied && (
-        <div className="flex items-center gap-2 px-3 py-2 bg-green-50 rounded-lg border border-green-100">
-           <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-           <p className="text-[9px] text-green-600 font-black uppercase tracking-widest">Access granted: Discount successfully injected.</p>
+        <div className="bg-green-50 border border-green-100 rounded-lg p-3 text-sm text-green-600">
+          Coupon applied successfully 🎉
         </div>
       )}
     </div>

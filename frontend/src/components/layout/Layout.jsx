@@ -1,56 +1,82 @@
 import { Outlet, useLocation } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import Navbar from "./Navbar";
-import BottomNav from "./BottomNav";
 import MobileHeader from "./MobileHeader";
+import OfferStrip from "./OfferStrip";
 import Footer from "./Footer";
+import BottomNav from "./BottomNav";
 import { Toaster } from "react-hot-toast";
 import WhatsAppButton from "../ui/WhatsAppButton";
-import { AnimatePresence, motion } from "framer-motion";
-import { slideInRight } from "../../utils/motion";
+import CartDrawer from "../cart/CartDrawer";
+import AuthModal from "../auth/AuthModal";
 
 export default function Layout() {
   const location = useLocation();
+  const [isCartOpen, setIsCartOpen] = useState(false);
+
+  const openCart = () => setIsCartOpen(true);
+  const closeCart = () => setIsCartOpen(false);
+
+  // Scroll to top on route change
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [location.pathname]);
 
   return (
-    <div className="min-h-screen flex flex-col bg-white text-[#111111] overflow-x-hidden">
+    <div className="min-h-screen flex flex-col bg-white text-slate-900 overflow-x-hidden">
 
-      {/* 🏙️ Minimal Shell */}
-      <div className="fixed inset-0 -z-10 bg-white" />
+      {/* Announcement */}
+      <OfferStrip />
 
-      {/* Header */}
-      <Navbar />
-      <MobileHeader />
+      {/* Desktop Header */}
+      <div className="hidden lg:block">
+        <Navbar onCartClick={openCart} />
+      </div>
 
-      {/* Main Container */}
-      <main className="flex-1 w-full max-w-[1400px] mx-auto px-6 md:px-10 py-8 md:py-8 lg:py-24 pb-32 md:pb-16 mt-0">
+      {/* Mobile Header */}
+      <div className="lg:hidden">
+        <MobileHeader onCartClick={openCart} />
+      </div>
 
+      {/* Main Content */}
+      <main
+        className="flex-1 w-full mx-auto pt-[60px] lg:pt-[72px] pb-16"
+        role="main"
+      >
         <AnimatePresence mode="wait">
           <motion.div
             key={location.pathname}
-            variants={slideInRight}
-            initial="hidden"
-            animate="visible"
-            exit="exit"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
           >
             <Outlet />
           </motion.div>
         </AnimatePresence>
-
       </main>
 
-      {/* Footer + Mobile Nav */}
-      <BottomNav />
+      {/* Footer */}
       <Footer />
 
-      {/* WhatsApp Support Button */}
+      {/* Bottom Navigation (Mobile Only) */}
+      <div className="lg:hidden">
+        <BottomNav onCartClick={openCart} />
+      </div>
+
+      {/* Global Components */}
+      <CartDrawer isOpen={isCartOpen} onClose={closeCart} />
+      <AuthModal />
       <WhatsAppButton />
 
-      {/* Luxury Toast Experience */}
+      {/* Toasts */}
       <Toaster
         position="top-center"
         toastOptions={{
+          duration: 3000,
           className:
-            "rounded-2xl bg-white text-[#0f172a] border border-[#E5E5E5] shadow-luxury px-6 py-4 text-[13px] font-bold uppercase tracking-widest",
+            "rounded-xl bg-white text-slate-900 border border-slate-200 shadow-md px-4 py-3 text-xs font-semibold"
         }}
       />
     </div>

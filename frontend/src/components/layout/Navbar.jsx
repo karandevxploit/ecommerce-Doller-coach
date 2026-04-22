@@ -1,274 +1,285 @@
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, NavLink } from "react-router-dom";
 import { useAuthStore, useCartStore } from "@/store";
 import {
   ShoppingCart,
   User,
-  LogOut,
   Search,
-  ChevronDown,
-  Sparkles,
-  Heart,
   Menu,
   X,
+  ChevronRight,
+  LogOut
 } from "lucide-react";
-import Button from "../ui/Button";
-import NotificationsDropdown from "../NotificationsDropdown";
 import { useMemo, useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useConfigStore } from "@/store/configStore";
+import SafeText from "@/components/common/SafeText";
+import { useSiteContentStore } from "@/store/siteContentStore";
+import logo from "@/assets/logo.png";
 
-export default function Navbar() {
-  const user = useAuthStore(state => state.user);
-  const isAuthenticated = useAuthStore(state => state.isAuthenticated);
-  const logout = useAuthStore(state => state.logout);
+const NAV_LINKS = [
+  { label: "Home", path: "/", end: true },
+  { label: "Men", path: "/collection/men" },
+  { label: "Women", path: "/collection/women" },
+  { label: "New", path: "/collection/new-arrivals" },
+  { label: "Collections", path: "/collection/featured" },
+  { label: "Sale", path: "/category/sale" }
+];
 
-  const config = useConfigStore(state => state.config);
-  const fetchConfig = useConfigStore(state => state.fetchConfig);
+export default function Navbar({ onCartClick }) {
+  const { user, logout, isAuthenticated, openAuthModal } = useAuthStore();
+  const { cart } = useCartStore();
+  const { content, previewContent, isPreviewMode } = useSiteContentStore();
 
-  useEffect(() => {
-    if (!config) fetchConfig();
-  }, [config, fetchConfig]);
-  const { items } = useCartStore();
+  const activeContent = isPreviewMode ? previewContent : content;
   const navigate = useNavigate();
-  const location = useLocation();
-  const [query, setQuery] = useState("");
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
   const [isScrolled, setIsScrolled] = useState(false);
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
-    const handleScroll = () => setIsScrolled(window.scrollY > 10);
+    const handleScroll = () => setIsScrolled(window.scrollY > 8);
     window.addEventListener("scroll", handleScroll);
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  const [prevLocation, setPrevLocation] = useState(location);
-  if (location !== prevLocation) {
-    setPrevLocation(location);
-    setIsMobileMenuOpen(false);
-  }
+  const cartCount = useMemo(() => {
+    if (!Array.isArray(cart)) return 0;
+    return cart.reduce((acc, item) => acc + (item?.quantity || 0), 0);
+  }, [cart]);
 
-  const cartCount = useMemo(() => items?.length || 0, [items]);
-  const initials = useMemo(() => user?.name?.[0]?.toUpperCase() || "U", [user]);
-
-  const handleSearch = (e) => {
-    if (e) e.preventDefault();
-    if (query.trim()) {
-      navigate(`/search?q=${encodeURIComponent(query.trim())}`);
-      setQuery("");
-      setIsMobileMenuOpen(false);
-    }
-  };
-
-  const navLinks = [
-    { name: "MEN", path: "/collection?category=MEN" },
-    { name: "WOMEN", path: "/collection?category=WOMEN" },
-    { name: "Trending", path: "/collection?trending=true" },
-  ];
+  const userInitial = user?.name?.charAt(0)?.toUpperCase() || "U";
+  const userImage = user?.picture || user?.avatar || user?.image;
 
   return (
-    <nav className="fixed top-0 left-0 right-0 z-[100] transition-all duration-300">
-      <div
-        className={`w-full transition-all duration-300 border-b ${isScrolled
-          ? "bg-white/95 backdrop-blur-md border-gray-100 shadow-sm py-2"
-          : "bg-white border-transparent py-3 md:py-4"
+    <>
+      {/* NAVBAR */}
+      <nav
+        role="navigation"
+        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 min-h-[70px] flex items-center border-b ${isScrolled
+            ? "bg-white/95 backdrop-blur-lg shadow-sm py-2"
+            : "bg-white py-3"
           }`}
       >
-        <div className="max-w-[1400px] mx-auto px-4 md:px-10 flex items-center justify-between">
+        <div className="container-responsive flex items-center justify-between w-full h-full relative">
 
-          {/* Brand Iduser */}
-          <div
-            onClick={() => navigate("/")}
-            className="flex items-center gap-3 relative group cursor-pointer z-10"
-          >
-            {config?.logo ? (
-              <img src={config.logo} alt="brand" className="h-9 md:h-8 w-auto object-contain transition-all duration-300" />
-            ) : (
-              <div className="relative h-9 w-9 md:h-8 md:w-8 flex items-center justify-center rounded-lg bg-[#0f172a] text-white shadow-sm transition-all duration-300">
-                <span className="text-sm font-black italic">D</span>
-              </div>
-            )}
-            <div className="flex flex-col">
-              <h1 className="text-xl md:text-2xl font-black tracking-tighter text-[#1e3a8a] uppercase leading-none">
-                DOLLER <span className="text-[#0f172a]">Coach</span>
-              </h1>
-              <p className="text-[8px] font-black uppercase tracking-[0.2em] text-gray-400 mt-1 group-hover:text-[#0f172a] transition-colors">
-                (By Gangwani and Company)
-              </p>
-            </div>
-          </div>
-
-          {/* Core Navigation Links */}
-          <div className="hidden lg:flex items-center gap-5">
-            {navLinks.map((link) => {
-              const isActive = location.pathname + location.search === link.path || location.pathname === link.path && !link.path.includes("?");
-              return (
-                <button
-                  key={link.name}
-                  onClick={() => navigate(link.path)}
-                  className="relative group text-[10px] font-black uppercase tracking-[0.2em] text-[#0f172a]/50 hover:text-[#0f172a] transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400 rounded-md px-2 py-1"
-                >
-                  {link.name}
-                  <span className={`absolute -bottom-1.5 left-0 h-0.5 bg-[#0f172a] transition-all duration-300 rounded-full ${isActive ? "w-full" : "w-0 group-hover:w-full"
-                    }`} />
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Dynamic Search Interface */}
-          <form
-            onSubmit={handleSearch}
-            className="hidden md:flex flex-1 max-w-[240px] lg:max-w-xs mx-8 relative"
-          >
-            <div className="relative w-full group">
-              <Search
-                size={14}
-                className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300 group-focus-within:text-[#0f172a] transition-colors"
-              />
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search"
-                className="w-full h-9 pl-11 pr-4 rounded-lg bg-[#f1f5f9] border border-transparent text-[#111111] font-bold uppercase tracking-widest text-[10px] focus:bg-white focus:ring-4 focus:ring-[#0f172a]/5 focus:border-[#0f172a]/30 outline-none transition-all placeholder:text-gray-300 shadow-inner"
-              />
-            </div>
-          </form>
-
-          {/* User & Cart Interactions (Visible only from tablets/desktop up) */}
-          <div className="hidden md:flex items-center gap-3 z-10">
-            <Button
-              variant="icon"
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="md:hidden"
+          {/* LEFT: DESKTOP NAV & MOBILE MENU */}
+          <div className="flex-1 flex items-center justify-start">
+            {/* MOBILE MENU TOGGLE */}
+            <button
+              onClick={() => setMobileMenuOpen(true)}
+              aria-label="Open menu"
+              className="lg:hidden p-2 -ml-2 rounded-md hover:bg-slate-100 transition text-black"
             >
-              {isMobileMenuOpen ? <X size={26} strokeWidth={2.5} /> : <Menu size={26} strokeWidth={2.5} />}
-            </Button>
+              <Menu size={24} />
+            </button>
 
-            {isAuthenticated ? (
-              <div className="flex items-center gap-2 md:gap-5">
-                <div className="hidden sm:block">
-                  <NotificationsDropdown />
-                </div>
-
-                <Button
-                  variant="icon"
-                  onClick={() => navigate("/wishlist")}
+            {/* DESKTOP NAV */}
+            <div className="hidden lg:flex items-center gap-8">
+              {NAV_LINKS.map((link) => (
+                <NavLink
+                  key={link.path}
+                  to={link.path}
+                  end={link.end}
+                  className={({ isActive }) =>
+                    `text-[11px] font-bold uppercase tracking-[0.15em] transition ${isActive
+                      ? "text-black"
+                      : "text-slate-500 hover:text-black"
+                    }`
+                  }
                 >
-                  <Heart size={18} strokeWidth={2.5} />
-                </Button>
-
-                <Button
-                  variant="icon"
-                  onClick={() => navigate("/cart")}
-                  className="relative"
-                >
-                  <ShoppingCart size={18} strokeWidth={2.5} />
-                  {cartCount > 0 && (
-                    <span className="absolute top-1 right-1 h-4 min-w-[16px] px-1 flex items-center justify-center text-[8px] bg-[#0f172a] text-white rounded-full font-black">
-                      {cartCount}
-                    </span>
-                  )}
-                </Button>
-
-                {/* Account User Profile */}
-                <div className="relative ml-1">
-                  <Button
-                    variant="icon"
-                    onClick={() => setIsProfileOpen(prev => !prev)}
-                    className="flex items-center gap-2 p-1 rounded-lg hover:bg-[#f1f5f9] transition-all shadow-none cursor-pointer"
-                  >
-                    <div className="h-8 w-8 rounded-lg bg-[#0f172a] text-white flex items-center justify-center font-black text-[10px] shadow-md">
-                      {initials}
-                    </div>
-                    <ChevronDown size={12} className={`text-gray-300 transition-all ${isProfileOpen ? "rotate-180 text-[#0f172a]" : ""}`} />
-                  </Button>
-
-                  {isProfileOpen && (
-                    <div className="absolute right-0 mt-4 w-64 bg-white border border-[#F2F2F2] rounded-3xl shadow-xl z-[110] overflow-hidden animate-in fade-in slide-in-from-top-3 duration-300">
-                      <div className="p-5 bg-[#f1f5f9]/50 text-[10px] font-black text-gray-300 uppercase tracking-[0.3em]">
-                        Security Clearances
-                      </div>
-                      <div className="p-3 border-b border-[#F2F2F2]">
-                        <p className="text-sm font-black text-[#0f172a] leading-none truncate">{user?.name?.toUpperCase()}</p>
-                        <p className="text-[10px] text-gray-400 font-bold tracking-widest truncate mt-2">{user?.email}</p>
-                      </div>
-
-                      <div className="p-3">
-                        <Button
-                          variant="primary"
-                          onClick={() => {
-                            navigate("/profile");
-                            setIsProfileOpen(false);
-                          }}
-                          className="w-full text-sm mb-2"
-                        >
-                          <User size={18} /> Profile Studio
-                        </Button>
-
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            logout();
-                            setIsProfileOpen(false);
-                          }}
-                          className="w-full text-sm"
-                        >
-                          <LogOut size={18} /> Sign Out
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <Button
-                variant="primary"
-                onClick={() => navigate("/login")}
-                className="text-sm"
-              >
-                Access Hub
-              </Button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Mobile Interaction Space */}
-      <AnimatePresence>
-        {isMobileMenuOpen && (
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className="md:hidden absolute left-0 right-0 top-full mt-3 mx-6 p-8 rounded-[2.5rem] bg-white border border-gray-100 shadow-sm z-[90]"
-          >
-            <form onSubmit={handleSearch} className="mb-8 relative">
-              <Search size={20} className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-300" />
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="MANIFEST SEARCH"
-                className="w-full h-16 pl-14 pr-6 rounded-3xl bg-[#f1f5f9] border border-transparent text-[#111111] font-black uppercase tracking-widest text-[12px] focus:ring-4 focus:ring-[#0f172a]/10 focus:border-[#0f172a]"
-              />
-            </form>
-
-            <div className="flex flex-col gap-3">
-              {navLinks.map((link) => (
-                <Button
-                  variant="secondary"
-                  key={link.name}
-                  onClick={() => navigate(link.path)}
-                  className="w-full justify-between"
-                >
-                  <span className="text-[#0f172a] font-bold">{link.name}</span>
-                  <ChevronDown size={18} className="-rotate-90 text-gray-400 transition-all" />
-                </Button>
+                  {link.label}
+                </NavLink>
               ))}
             </div>
-          </motion.div>
+          </div>
+
+          {/* CENTER: LOGO */}
+          <div className="flex-shrink-0 flex justify-center items-center absolute left-1/2 -translate-x-1/2">
+            <button
+              onClick={() => navigate("/")}
+              aria-label="Go to homepage"
+              className="flex items-center gap-3 group"
+            >
+              <img
+                src={activeContent?.branding?.logo?.url || logo}
+                alt="Brand logo"
+                className="h-10 md:h-12 object-contain transition-transform group-hover:scale-105"
+                onError={(e) => (e.currentTarget.src = logo)}
+              />
+              <span className="hidden sm:block text-xl md:text-2xl font-black uppercase tracking-tighter text-black">
+                DOLLER COACH
+              </span>
+            </button>
+          </div>
+
+          {/* RIGHT: ACTIONS */}
+          <div className="flex-1 flex items-center justify-end gap-3 sm:gap-5">
+
+            {/* SEARCH */}
+            <button
+              onClick={() => navigate("/search")}
+              aria-label="Search products"
+              className="p-2 text-black rounded-md hover:bg-slate-100 transition"
+            >
+              <Search size={20} strokeWidth={2.5} />
+            </button>
+
+            {/* CART */}
+            <button
+              onClick={onCartClick}
+              aria-label="Open cart"
+              className="relative p-2 text-black rounded-md hover:bg-slate-100 transition"
+            >
+              <ShoppingCart size={20} strokeWidth={2.5} />
+              {cartCount > 0 && (
+                <span className="absolute 0 right-0 bg-black text-white text-[10px] font-bold h-4 min-w-[16px] px-1 rounded-full flex items-center justify-center -translate-y-1 tranlate-x-1 border-2 border-white">
+                  {cartCount}
+                </span>
+              )}
+            </button>
+
+            {/* USER / AUTH */}
+            {isAuthenticated ? (
+              <button
+                onClick={() => navigate("/profile")}
+                aria-label="Profile"
+                className="h-9 w-9 overflow-hidden rounded-full border border-slate-200 bg-slate-50 flex items-center justify-center transition hover:ring-2 hover:ring-black hover:border-black"
+              >
+                {userImage ? (
+                  <img src={userImage} alt="Profile" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-sm font-bold text-black">{userInitial}</span>
+                )}
+              </button>
+            ) : (
+              <button
+                onClick={openAuthModal}
+                aria-label="Login"
+                className="hidden sm:block px-6 py-2.5 bg-black text-white text-[11px] font-bold uppercase tracking-widest transition-colors hover:bg-slate-800"
+              >
+                Login
+              </button>
+            )}
+
+            {/* MOBILE LOGIN FALLBACK - So they can login on mobile without opening drawer if not using user icon */}
+            {!isAuthenticated && (
+              <button
+                onClick={openAuthModal}
+                aria-label="Login"
+                className="sm:hidden p-2 text-black hover:bg-slate-100 transition rounded-md ml-1"
+              >
+                <User size={20} strokeWidth={2.5} />
+              </button>
+            )}
+
+          </div>
+
+        </div>
+      </nav>
+
+      {/* MOBILE DRAWER */}
+      <AnimatePresence>
+        {mobileMenuOpen && (
+          <>
+            {/* OVERLAY */}
+            <motion.div
+              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setMobileMenuOpen(false)}
+            />
+
+            {/* DRAWER */}
+            <motion.aside
+              role="dialog"
+              aria-label="Mobile menu"
+              initial={{ x: "-100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "-100%" }}
+              transition={{ ease: "easeInOut", duration: 0.3 }}
+              className="fixed top-0 left-0 bottom-0 w-[85%] max-w-sm bg-white z-[101] flex flex-col shadow-2xl"
+            >
+              {/* HEADER */}
+              <div className="flex items-center justify-between p-6 border-b border-slate-100">
+                <span className="text-xl font-black uppercase tracking-tight text-black">
+                  MENU
+                </span>
+                <button
+                  onClick={() => setMobileMenuOpen(false)}
+                  aria-label="Close menu"
+                  className="p-2 text-slate-400 hover:text-black transition"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              {/* LINKS */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {NAV_LINKS.map((link) => (
+                  <NavLink
+                    key={link.path}
+                    to={link.path}
+                    end={link.end}
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={({ isActive }) =>
+                      `flex items-center justify-between text-lg font-bold uppercase tracking-widest ${isActive
+                        ? "text-black"
+                        : "text-slate-400 hover:text-black transition-colors"
+                      }`
+                    }
+                  >
+                    <span>{link.label}</span>
+                    <ChevronRight size={20} strokeWidth={3} className={isActive ? "opacity-100" : "opacity-0"} />
+                  </NavLink>
+                ))}
+              </div>
+
+              {/* USER SECTION */}
+              <div className="p-6 border-t border-slate-100 bg-slate-50">
+                {isAuthenticated ? (
+                  <div className="flex items-center justify-between bg-white p-4 rounded border border-slate-100 shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 overflow-hidden rounded-full border border-slate-200 bg-slate-100 flex items-center justify-center">
+                        {userImage ? (
+                          <img src={userImage} alt="Profile" className="w-full h-full object-cover" />
+                        ) : (
+                          <span className="text-sm font-bold text-black">{userInitial}</span>
+                        )}
+                      </div>
+                      <div>
+                        <SafeText className="text-sm font-bold text-black block tracking-wide uppercase">
+                          {user?.name || "User"}
+                        </SafeText>
+                        <span className="text-[10px] uppercase font-bold tracking-widest text-slate-400">
+                          My Account
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={logout}
+                      aria-label="Logout"
+                      className="p-2 text-red-500 hover:bg-red-50 rounded transition"
+                    >
+                      <LogOut size={20} />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => {
+                      openAuthModal();
+                      setMobileMenuOpen(false);
+                    }}
+                    className="w-full py-4 bg-black text-white text-xs font-bold uppercase tracking-widest transition-colors hover:bg-slate-800"
+                  >
+                    Login / Register
+                  </button>
+                )}
+              </div>
+            </motion.aside>
+          </>
         )}
       </AnimatePresence>
-    </nav>
+    </>
   );
 }

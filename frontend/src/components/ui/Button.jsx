@@ -1,20 +1,67 @@
 import React from "react";
+import clsx from "clsx";
 
-const Button = ({ children, variant = "primary", className = "", ...props }) => {
-  const styles = {
-    primary: "bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold shadow-md hover:bg-indigo-700 hover:shadow-lg",
-    outline: "border border-indigo-600 text-indigo-600 px-5 py-2.5 rounded-xl hover:bg-indigo-600 hover:text-white",
-    secondary: "bg-gray-100 text-gray-800 px-5 py-2.5 rounded-xl hover:bg-gray-200",
-    danger: "bg-red-500 text-white px-5 py-2.5 rounded-xl hover:bg-red-600",
-    icon: "p-2 rounded-lg text-gray-700 hover:bg-gray-100",
-    quantity: "px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 font-semibold"
+/**
+ * Button Component
+ * Supports variants, sizes, loading state, and accessibility
+ */
+const Button = ({
+  children,
+  variant = "primary",
+  size = "md",
+  loading = false,
+  disabled = false,
+  className = "",
+  type = "button",
+  ...props
+}) => {
+  const base =
+    "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed";
+
+  const variants = {
+    primary:
+      "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm hover:shadow-md",
+    outline:
+      "border border-indigo-600 text-indigo-600 hover:bg-indigo-600 hover:text-white",
+    secondary:
+      "bg-slate-100 text-slate-800 hover:bg-slate-200",
+    danger:
+      "bg-red-500 text-white hover:bg-red-600",
+    ghost:
+      "text-slate-700 hover:bg-slate-100",
+    icon:
+      "p-2 text-slate-700 hover:bg-slate-100",
+    quantity:
+      "px-3 py-1 bg-slate-100 hover:bg-slate-200 font-semibold"
+  };
+
+  const sizes = {
+    sm: "px-3 py-1.5 text-xs",
+    md: "px-4 py-2 text-sm",
+    lg: "px-6 py-3 text-base"
   };
 
   return (
-    <button className={`${styles[variant]} focus:outline-none focus:ring-2 focus:ring-indigo-400 transition-all duration-200 flex items-center justify-center gap-2 ${className}`} {...props}>
-      {children}
+    <button
+      type={type}
+      disabled={disabled || loading}
+      aria-disabled={disabled || loading}
+      aria-busy={loading}
+      className={clsx(
+        base,
+        variants[variant],
+        variant !== "icon" && variant !== "quantity" && sizes[size],
+        className
+      )}
+      {...props}
+    >
+      {loading ? (
+        <span className="w-4 h-4 border-2 border-white/60 border-t-transparent rounded-full animate-spin" />
+      ) : (
+        children
+      )}
     </button>
   );
 };
 
-export default Button;
+export default React.memo(Button);

@@ -1,163 +1,232 @@
-import { memo, useState, useRef } from "react";
+import { memo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useAuthStore, useCartStore, useWishlistStore } from "@/store";
-import { Heart, ShoppingBag, ArrowRight, Zap, Sparkles } from "lucide-react";
+import { useAuthStore, useCartStore, useWishlistStore } from "../store";
+import { Heart, ShoppingBag, Eye } from "lucide-react";
 import toast from "react-hot-toast";
 import { motion, AnimatePresence } from "framer-motion";
 import { formatPrice } from "../utils/format";
 import QuickSizeSelector from "./QuickSizeSelector";
+import QuickView from "./ui/QuickView";
+import LazyImage from "./ui/LazyImage";
+import { resolveImageUrl } from "../utils/url";
+import { useActionGuard } from "../hooks/useActionGuard";
 
-function ProductCard({ product }) {
+const FALLBACK_IMAGE = "https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?q=80&w=800&auto=format&fit=crop";
+
+const ProductCard = memo(function ProductCard({
+  product = {},
+  layout = "vertical"
+}) {
   const navigate = useNavigate();
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, openAuthModal } = useAuthStore();
   const { addToCart } = useCartStore();
-  const { toggleWishlist, isInWishlist } = useWishlistStore(); 
+  const { toggleWishlist, isInWishlist } = useWishlistStore();
+
   const [showSizeSelector, setShowSizeSelector] = useState(false);
-  const [isHovered, setIsHovered] = useState(false);
-  const isWishlisted = isInWishlist(product._id || product.id);
+  const [showQuickView, setShowQuickView] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const discount = Number(product?.discountPrice ? (1 - product.discountPrice / product.originalPrice) * 100 : product?.discount || 0);
+  /* ---------------- SAFE DATA ---------------- */
+  const productId = product?.id || product?._id?.toString?.();
+  const isWishlisted = isInWishlist?.(productId);
+  const price = product?.price ?? 0;
+  const originalPrice = product?.originalPrice ?? price;
+  const stock = product?.stock ?? 0;
 
-  const handleAddToCart = (e) => {
+  const discount =
+    originalPrice > price
+      ? Math.round(((originalPrice - price) / originalPrice) * 100)
+      : 0;
+
+  const isHorizontal = layout === "horizontal";
+
+  // Resolve image and provide fallback
+  const rawImage = product?.images?.[0] || product?.image;
+  const imageUrl = rawImage ? resolveImageUrl(rawImage) : FALLBACK_IMAGE;
+
+  const { guardAction } = useActionGuard();
+
+  /* ---------------- ACTIONS ---------------- */
+  const handleAddToCart = async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!product || product.stock <= 0) return toast.error("Stock Out of Stock.");
 
-    if (product.type === "FULL_OUTFIT") {
-      setShowSizeSelector(true);
-    } else {
-      addToCart(product._id || product.id, 1);
-      toast.success("System Added to Cart.");
-    }
+    if (!productId) return;
+    if (stock <= 0) return toast.error("Out of stock");
+
+    // Guard Logic
+    guardAction("ADD_TO_CART", { productId, variantIdx: 0 }, async () => {
+      if (product?.variants?.length > 0) {
+        setShowSizeSelector(true);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        await addToCart(productId, 1);
+        toast.success("Added to cart");
+      } catch {
+        toast.error("Failed to add item");
+      } finally {
+        setLoading(false);
+      }
+    });
   };
 
-  const handleQuickSelect = ({ topSize, bottomSize }) => {
-    addToCart(product._id || product.id, 1, null, topSize, bottomSize);
-    setShowSizeSelector(false);
-    toast.success("Combo Added to Bag.");
+  const handleBuyNow = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    guardAction("BUY_NOW", { productId }, () => {
+      // Logic for buy now (usually add to cart then navigate to checkout)
+      navigate(`/product/${productId}?buynow=true`);
+    });
   };
 
-  const handleWishlist = async (e) => {
+  const handleWishlist = (e) => {
     e.preventDefault();
     e.stopPropagation();
 
-    if (!isAuthenticated) return navigate("/login");
-    await toggleWishlist(product._id || product.id);
+    guardAction("WISHLIST", { productId }, () => {
+      toggleWishlist(productId);
+    });
   };
 
-  const getOptimizedImage = (url) => {
-    if (!url) return "https://images.unsplash.com/photo-1591047139829-d91aecb6caea?w=436&auto=format&fit=crop&q=80";
-    if (url.includes("res.cloudinary.com") && !url.includes("f_auto")) {
-      return url.replace("/upload/", "/upload/f_auto,q_auto/");
-    }
-    return url;
+  const handleQuickView = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setShowQuickView(true);
   };
 
+  /* ---------------- UI ---------------- */
   return (
-    <motion.div
-      whileHover={{ y: -8, transition: { duration: 0.4, ease: [0.22, 1, 0.36, 1] } }}
-      className={`bg-white rounded-2xl shadow-sm overflow-hidden hover:shadow-2xl transition-all flex flex-col h-full relative group ${product.type === 'FULL_OUTFIT' ? 'ring-1 ring-indigo-50 border-indigo-100' : ''}`}
-    >
-      <Link to={(product._id || product.id) ? `/product/${product._id || product.id}` : "/collection"} className="flex flex-col h-full">
-        {/* IMAGE */}
-        <div
-          className="relative h-48 overflow-hidden bg-gray-50 border-b border-gray-50"
-          onMouseEnter={() => setIsHovered(true)}
-          onMouseLeave={() => setIsHovered(false)}
+    <>
+      <article
+        className={`group relative flex flex-col transition ${isHorizontal ? "flex-row gap-6" : "w-full"
+          }`}
+      >
+        <Link
+          to={productId ? `/product/${productId}` : "#"}
+          className={`flex w-full ${isHorizontal ? "flex-row gap-6" : "flex-col"
+            }`}
         >
-          <img
-            src={getOptimizedImage(product.images?.[0] || product.image)}
-            loading="lazy"
-            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
-            alt={product.title}
-          />
-
-          {/* BADGES */}
-          <div className="absolute top-2 left-2 z-20 flex flex-col gap-1.5">
-            {product.type === 'FULL_OUTFIT' && (
-              <motion.div
-                animate={{ opacity: [0.8, 1, 0.8], scale: [0.98, 1, 0.98] }}
-                transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-                className="bg-indigo-600 text-white px-2 py-1 rounded-md text-[8px] font-black uppercase tracking-widest flex items-center gap-1 shadow-lg"
-              >
-                <Sparkles size={10} className="fill-white" /> Full Outfit
-              </motion.div>
-            )}
-            {discount > 0 && (
-              <motion.div
-                animate={{ y: [0, -2, 0] }}
-                transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-                className="bg-[#0f172a] text-white px-2 py-1 rounded-md text-[8px] font-black uppercase tracking-widest shadow-lg"
-              >
-                {Math.round(discount)}% OFF
-              </motion.div>
-            )}
-          </div>
-
-          <button
-            type="button"
-            onClick={handleWishlist}
-            className={`absolute top-2 right-2 z-20 p-1.5 backdrop-blur-md rounded-full transition-all shadow-sm border ${isWishlisted
-                ? "bg-red-500 text-white border-red-500"
-                : "bg-white/95 text-gray-400 border-gray-100 hover:text-red-500"
+          {/* IMAGE */}
+          <div
+            className={`relative overflow-hidden bg-slate-50 ${isHorizontal
+              ? "w-32 md:w-48 aspect-[3/4]"
+              : "w-full aspect-[3/4]" // Taller aspect ratio for luxury fashion feel
               }`}
-            aria-label="Add to wishlist"
           >
-            <Heart size={16} fill={isWishlisted ? "currentColor" : "none"} strokeWidth={isWishlisted ? 0 : 2} />
-          </button>
+            <LazyImage
+              src={imageUrl}
+              alt={product?.title || "Product"}
+              className="group-hover:scale-110 !transition-transform !duration-700 !ease-[cubic-bezier(0.25,0.46,0.45,0.94)] object-cover"
+              wrapperClassName="w-full h-full"
+            />
 
-          {/* ADD TO CART OVERLAY */}
-          <div className="absolute bottom-2 left-2 right-2 z-20">
-            <motion.button
-              whileTap={{ scale: 0.92 }}
-              transition={{ type: "spring", stiffness: 400, damping: 17 }}
-              type="button"
-              onClick={handleAddToCart}
-              className="w-full py-2.5 bg-[#0f172a] text-white text-[10px] font-black uppercase tracking-widest rounded-xl shadow-xl flex items-center justify-center gap-2 hover:bg-black transition-colors"
+            {/* Discount */}
+            {discount > 0 && (
+              <span className="absolute top-0 left-0 bg-red-600 text-white text-[10px] font-bold uppercase tracking-wider px-3 py-1 m-3 z-10">
+                {discount}% OFF
+              </span>
+            )}
+
+            {/* Wishlist */}
+            <button
+              onClick={handleWishlist}
+              aria-label="Add to wishlist"
+              className="absolute top-3 right-3 p-2 z-10 transition-transform hover:scale-110 focus:outline-none"
             >
-              <ShoppingBag size={14} /> Add to bag
-            </motion.button>
-          </div>
-
-          {/* QUICK SIZE SELECTOR OVERLAY */}
-          <AnimatePresence>
-            {showSizeSelector && (
-              <QuickSizeSelector
-                product={product}
-                onSelect={handleQuickSelect}
-                onClose={() => setShowSizeSelector(false)}
+              <Heart
+                size={20}
+                className={`transition-colors duration-300 drop-shadow-md ${isWishlisted ? "text-red-500 fill-red-500" : "text-white hover:text-red-400"
+                  }`}
               />
-            )}
-          </AnimatePresence>
-        </div>
+            </button>
 
-        {/* CONTENT */}
-        <div className="p-3 space-y-1 flex-1 flex flex-col justify-end">
-          <div className="space-y-1">
-            <div className="flex justify-between items-start">
-              <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest leading-none mb-1">
-                {product.category || "General"}
-              </span>
+            {/* Desktop Hover Actions */}
+            <div className="hidden md:flex absolute inset-x-0 bottom-0 p-4 translate-y-full opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 ease-out bg-gradient-to-t from-black/60 to-transparent gap-2 z-10">
+              <button
+                onClick={handleAddToCart}
+                disabled={loading}
+                className="flex-1 bg-white text-black font-semibold text-xs tracking-wider uppercase py-3 hover:bg-black hover:text-white transition-colors duration-300"
+              >
+                {loading ? "Adding..." : "Add to Case"}
+              </button>
+
+              <button
+                onClick={handleQuickView}
+                className="px-4 bg-white/90 hover:bg-white text-black transition-colors duration-300 flex justify-center items-center"
+              >
+                <Eye size={18} />
+              </button>
             </div>
-            <h3 className="text-sm font-bold text-gray-900 line-clamp-2 leading-tight">
-              {product.title}
-            </h3>
           </div>
 
-          <div className="flex items-center justify-between pt-2">
-            <span className="text-base font-black text-gray-900 tracking-tighter">
-              {formatPrice(product.price)}
-            </span>
-            {product.type === 'FULL_OUTFIT' && (
-              <span className="text-[8px] font-black text-indigo-400 uppercase tracking-widest bg-indigo-50 px-1.5 py-0.5 rounded leading-none">
-                Combo Set
+          {/* DETAILS */}
+          <div className={`flex-1 flex flex-col gap-1 ${isHorizontal ? "pt-2 md:pt-4" : "pt-4"}`}>
+            <div className="flex justify-between items-start gap-2">
+              <h3 className="text-sm md:text-base font-semibold text-slate-900 line-clamp-1 uppercase tracking-tight">
+                {product?.title || "Luxury Item"}
+              </h3>
+            </div>
+
+            <p className="text-xs text-slate-500 uppercase tracking-widest">
+              {product?.brand || "Exclusive Collection"}
+            </p>
+
+            <div className="flex items-center gap-3 mt-1">
+              <span className="text-sm font-bold text-slate-900 tracking-wide">
+                {price > 0 ? formatPrice(price) : "Contact Us"}
               </span>
-            )}
-          </div>
-        </div>
-      </Link>
-    </motion.div>
-  );
-}
 
-export default memo(ProductCard);
+              {originalPrice > price && (
+                <span className="text-xs text-slate-400 line-through tracking-wide">
+                  {formatPrice(originalPrice)}
+                </span>
+              )}
+            </div>
+          </div>
+        </Link>
+
+        {/* MOBILE ACTION */}
+        <button
+          onClick={handleAddToCart}
+          disabled={loading}
+          className="md:hidden mt-3 w-full py-3 text-xs font-semibold uppercase tracking-widest bg-black text-white hover:bg-slate-800 transition-colors"
+        >
+          {loading ? "Adding..." : "Add"}
+        </button>
+      </article>
+
+      {/* QUICK VIEW */}
+      <AnimatePresence>
+        {showQuickView && (
+          <QuickView
+            product={product}
+            isOpen={showQuickView}
+            onClose={() => setShowQuickView(false)}
+            onAddToCart={handleAddToCart}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* SIZE SELECTOR */}
+      <AnimatePresence>
+        {showSizeSelector && (
+          <QuickSizeSelector
+            product={product}
+            onSelect={({ color, size, variantIdx }) => {
+              addToCart(productId, 1, size, null, null, color, variantIdx);
+              setShowSizeSelector(false);
+              toast.success("Added to cart");
+            }}
+            onClose={() => setShowSizeSelector(false)}
+          />
+        )}
+      </AnimatePresence>
+    </>
+  );
+});
+
+export default ProductCard;

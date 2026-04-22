@@ -1,72 +1,94 @@
 import React from "react";
 import { AlertTriangle, RefreshCcw, Home } from "lucide-react";
 
+/**
+ * ErrorBoundary
+ * Handles UI crashes gracefully with recovery options
+ */
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
+  static getDerivedStateFromError() {
+    return { hasError: true };
   }
 
   componentDidCatch(error, info) {
-    console.error("UI Crash detected:", error, info);
+    if (process.env.NODE_ENV === "development") {
+      console.error("ErrorBoundary:", error, info);
+    }
+    // TODO: send to monitoring service (Sentry, etc.)
   }
+
+  handleReset = () => {
+    this.setState({ hasError: false });
+  };
+
+  handleReload = () => {
+    window.location.reload();
+  };
+
+  handleHome = () => {
+    window.location.href = "/";
+  };
 
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-[#ffffff] text-white px-6">
-
-          {/* Background Glow */}
-          <div className="absolute inset-0 -z-10">
-            <div className="absolute top-0 right-0 w-[400px] h-[400px] bg-transparent  rounded-full" />
-            <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-transparent  rounded-full" />
-          </div>
-
+        <div
+          className="min-h-screen flex items-center justify-center bg-white px-6"
+          role="alert"
+          aria-live="assertive"
+        >
           <div className="max-w-md w-full text-center">
 
             {/* Icon */}
             <div className="mb-6 flex justify-center">
-              <div className="relative">
-                <div className="absolute inset-0 blur-xl bg-red-500/30 rounded-full" />
-                <div className="relative h-14 w-14 flex items-center justify-center rounded-2xl bg-[#1e3a8a] shadow-lg">
-                  <AlertTriangle size={26} />
-                </div>
+              <div className="h-14 w-14 flex items-center justify-center rounded-xl bg-red-100 text-red-600">
+                <AlertTriangle size={26} />
               </div>
             </div>
 
             {/* Title */}
-            <h2 className="text-2xl md:text-3xl font-semibold mb-3 tracking-tight">
+            <h2 className="text-xl md:text-2xl font-semibold text-slate-900 mb-2">
               Something went wrong
             </h2>
 
             {/* Message */}
-            <p className="text-sm text-white/60 mb-8 leading-relaxed">
-              We encountered an unexpected issue. Please try refreshing the page or return home.
+            <p className="text-sm text-slate-500 mb-6">
+              The page didn’t load properly. You can try again or go back to the homepage.
             </p>
 
             {/* Actions */}
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
 
-              {/* Reload */}
+              {/* Retry */}
               <button
-                onClick={() => window.location.reload()}
-                className="px-4 py-2 text-sm rounded-lg bg-[#0f172a] text-white hover:scale-[1.02] shadow-sm transition-all"
+                onClick={this.handleReset}
+                className="flex items-center justify-center gap-2 px-4 py-2 text-sm rounded-lg bg-slate-900 text-white hover:bg-slate-800 transition"
               >
                 <RefreshCcw size={16} />
-                Reload
+                Try again
+              </button>
+
+              {/* Reload */}
+              <button
+                onClick={this.handleReload}
+                className="flex items-center justify-center gap-2 px-4 py-2 text-sm rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 transition"
+              >
+                <RefreshCcw size={16} />
+                Reload page
               </button>
 
               {/* Home */}
               <button
-                onClick={() => (window.location.href = "/")}
-                className="px-4 py-2 text-sm rounded-lg bg-[#0f172a] text-white hover:scale-[1.02] shadow-sm transition-all"
+                onClick={this.handleHome}
+                className="flex items-center justify-center gap-2 px-4 py-2 text-sm rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 transition"
               >
                 <Home size={16} />
-                Home
+                Go home
               </button>
 
             </div>

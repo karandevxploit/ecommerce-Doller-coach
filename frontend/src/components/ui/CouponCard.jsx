@@ -1,116 +1,189 @@
-import React, { useState, useEffect } from "react";
-import { Tag, Copy, Check, Clock, Zap } from "lucide-react";
+import React, { useState, useEffect, useRef } from "react";
+import { Copy, Check, Clock, Zap, Lock } from "lucide-react";
 import toast from "react-hot-toast";
 
-export default function CouponCard({ coupon, onApply }) {
+export default function CouponCard({ coupon = {}, onApply }) {
   const [copied, setCopied] = useState(false);
   const [timeLeft, setTimeLeft] = useState("");
-  const isUpcoming = coupon.status === "upcoming";
+  const timerRef = useRef(null);
 
-  const copyToClipboard = () => {
-    if (isUpcoming) return;
-    navigator.clipboard.writeText(coupon.code);
-    setCopied(true);
-    toast.success("Code Transmitted to Clipboard");
-    setTimeout(() => setCopied(false), 2000);
+  const isUpcoming = coupon?.status === "upcoming";
+  const isExpired = coupon?.status === "expired";
+
+  const safeCode = coupon?.code || "";
+  const safeMinOrder = coupon?.minOrderValue || 0;
+
+  const fallbackCopy = (text) => {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const copyToClipboard = async () => {
+    if (!safeCode || isUpcoming || isExpired) return;
+
+    let success = false;
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(safeCode);
+        success = true;
+      } else {
+        success = fallbackCopy(safeCode);
+      }
+    } catch {
+      success = fallbackCopy(safeCode);
+    }
+
+    if (success) {
+      setCopied(true);
+      toast.success("Code copied");
+      setTimeout(() => setCopied(false), 2000);
+    } else {
+      toast.error("Unable to copy code");
+    }
   };
 
   useEffect(() => {
-    const timer = setInterval(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+
+    timerRef.current = setInterval(() => {
       const now = new Date();
-      const target = isUpcoming ? new Date(coupon.startDate) : new Date(coupon.expiryDate);
-      const diff = Math.max(0, target - now);
-      
-      if (diff === 0) {
-        setTimeLeft(isUpcoming ? "Starting..." : "EXPIRED");
+      const target = isUpcoming
+        ? new Date(coupon?.startDate)
+        : new Date(coupon?.expiryDate);
+
+      const diff = target - now;
+
+      if (!target || isNaN(target)) {
+        setTimeLeft("");
+        return;
+      }
+
+      if (diff <= 0) {
+        setTimeLeft(isUpcoming ? "Starting soon" : "Expired");
         return;
       }
 
       const h = Math.floor(diff / 3600000);
       const m = Math.floor((diff % 3600000) / 60000);
       const s = Math.floor((diff % 60000) / 1000);
-      
-      if (h > 24) {
+
+      if (h >= 24) {
         setTimeLeft(`${Math.floor(h / 24)}d left`);
       } else {
-        setTimeLeft(`${String(h).padStart(2, '0')}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`);
+        setTimeLeft(
+          `${String(h).padStart(2, "0")}h ${String(m).padStart(
+            2,
+            "0"
+          )}m ${String(s).padStart(2, "0")}s`
+        );
       }
     }, 1000);
 
-    return () => clearInterval(timer);
-  }, [coupon.expiryDate, coupon.startDate, isUpcoming]);
+    return () => clearInterval(timerRef.current);
+  }, [coupon?.expiryDate, coupon?.startDate, isUpcoming]);
 
-  const discountValueStr = coupon.discountType === "percentage" 
-    ? `${coupon.discountValue}% OFF` 
-    : `₹${coupon.discountValue} OFF`;
+  const discountValueStr =
+    coupon?.discountType === "percentage"
+      ? `${coupon?.discountValue || 0}% OFF`
+      : `₹${coupon?.discountValue || 0} OFF`;
 
   return (
-    <div className={`relative group bg-white border border-gray-100 rounded-2xl p-4 shadow-sm transition-all overflow-hidden ${
-      isUpcoming ? "opacity-75 grayscale-[0.5]" : "hover:shadow-md hover:border-[#0f172a]"
-    }`}>
-      {/* Background Decor */}
-      <div className="absolute -top-6 -right-6 h-16 w-16 bg-gray-50 rounded-full group-hover:scale-150 transition-transform duration-700" />
-      
-      <div className="relative z-10 space-y-3">
-        <div className="flex justify-between items-start">
-          <div className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest border ${
-            isUpcoming ? "bg-amber-50 text-amber-600 border-amber-100" : "bg-green-50 text-green-600 border-green-100"
-          }`}>
-            {isUpcoming ? (
-              <><Clock size={10} /> ⏳ Coming Soon</>
-            ) : (
-              <><div className="w-1 h-1 bg-green-500 rounded-full animate-pulse" /> 🔥 Live</>
-            )}
-          </div>
-          <div className="flex flex-col items-end">
-            <span className="text-[7px] font-black uppercase tracking-widest text-gray-300">
-               {isUpcoming ? "Starts In" : "Ends In"}
-            </span>
-            <span className="text-[9px] font-black text-[#0f172a] tabular-nums">
-              {timeLeft}
-            </span>
-          </div>
+    <div
+      className={`relative bg-white border border-slate-200 rounded-xl p-4 shadow-sm transition ${isUpcoming || isExpired
+          ? "opacity-70"
+          : "hover:shadow-md hover:border-slate-300"
+        }`}
+      role="region"
+      aria-label={`Coupon ${safeCode}`}
+    >
+      {/* Header */}
+      <div className="flex justify-between items-start mb-3">
+        <div
+          className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold ${isUpcoming
+              ? "bg-yellow-100 text-yellow-700"
+              : isExpired
+                ? "bg-red-100 text-red-600"
+                : "bg-green-100 text-green-700"
+            }`}
+        >
+          {isUpcoming ? (
+            <>
+              <Clock size={12} /> Coming soon
+            </>
+          ) : isExpired ? (
+            <>Expired</>
+          ) : (
+            <>Active</>
+          )}
         </div>
 
-        <div>
-          <h3 className="text-lg font-black text-[#0f172a] tracking-tight leading-none mb-1">
-            {discountValueStr}
-          </h3>
-          <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">
-            Min. Order: ₹{coupon.minOrderValue || 0}
+        <div className="text-right">
+          <p className="text-[10px] text-slate-400">
+            {isUpcoming ? "Starts in" : "Ends in"}
+          </p>
+          <p className="text-xs font-semibold text-slate-800">
+            {timeLeft || "--"}
           </p>
         </div>
+      </div>
 
-        <div className="flex items-center gap-2">
-          <div 
-            onClick={copyToClipboard}
-            className={`flex-1 flex items-center justify-between px-4 py-2 bg-[#f1f5f9] border border-dashed border-gray-200 rounded-xl transition-all ${
-              isUpcoming ? "cursor-not-allowed" : "cursor-pointer hover:bg-white hover:border-[#0f172a] group/code"
+      {/* Discount */}
+      <div className="mb-3">
+        <h3 className="text-lg font-bold text-slate-900">
+          {discountValueStr}
+        </h3>
+        <p className="text-xs text-slate-500">
+          Minimum order ₹{safeMinOrder}
+        </p>
+      </div>
+
+      {/* Code + Action */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={copyToClipboard}
+          disabled={isUpcoming || isExpired}
+          aria-label="Copy coupon code"
+          className={`flex-1 flex items-center justify-between px-3 py-2 border border-dashed rounded-lg text-sm ${isUpcoming || isExpired
+              ? "bg-slate-100 text-slate-400 cursor-not-allowed"
+              : "bg-slate-50 hover:bg-white hover:border-slate-400"
             }`}
-          >
-            <span className="text-xs font-black text-[#0f172a] tracking-widest uppercase">
-              {coupon.code}
-            </span>
-            {!isUpcoming && (
-              copied ? (
-                <Check size={12} className="text-green-500" />
-              ) : (
-                <Copy size={12} className="text-gray-300 group-hover/code:text-[#0f172a]" />
-              )
-            )}
-            {isUpcoming && <Lock size={12} className="text-gray-300" />}
-          </div>
-          
-          <button
-            onClick={() => onApply(coupon.code)}
-            disabled={isUpcoming}
-            className={`h-9 px-4 rounded-xl text-[9px] font-black uppercase tracking-widest flex items-center gap-1 transition-all shadow-md active:scale-95 ${
-              isUpcoming ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "bg-[#0f172a] text-white hover:bg-black"
+        >
+          <span className="font-semibold tracking-wide uppercase">
+            {safeCode || "N/A"}
+          </span>
+
+          {isUpcoming || isExpired ? (
+            <Lock size={14} />
+          ) : copied ? (
+            <Check size={14} className="text-green-600" />
+          ) : (
+            <Copy size={14} />
+          )}
+        </button>
+
+        <button
+          onClick={() => onApply?.(safeCode)}
+          disabled={isUpcoming || isExpired}
+          className={`h-9 px-4 rounded-lg text-sm font-medium flex items-center gap-1 ${isUpcoming || isExpired
+              ? "bg-slate-200 text-slate-400 cursor-not-allowed"
+              : "bg-indigo-600 text-white hover:bg-indigo-700"
             }`}
-          >
-            <Zap size={10} fill={isUpcoming ? "gray" : "white"} /> {isUpcoming ? "Locked" : "Apply"}
-          </button>
-        </div>
+        >
+          <Zap size={14} />
+          {isUpcoming ? "Locked" : isExpired ? "Expired" : "Apply"}
+        </button>
       </div>
     </div>
   );

@@ -1,47 +1,46 @@
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuthStore } from "../store";
 
+/**
+ * ProtectedRoute
+ * Guards private routes with proper UX + state handling
+ */
 export default function ProtectedRoute({ children }) {
   const { isAuthenticated, loading } = useAuthStore();
   const location = useLocation();
 
-  // 🔄 Loading State (Premium)
+  /* ---------------- LOADING ---------------- */
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#ffffff] text-white">
-
-        {/* Background Glow */}
-        <div className="absolute inset-0 -z-10">
-          <div className="absolute top-0 right-0 w-[400px] h-[400px] bg-transparent  rounded-full" />
-          <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-transparent  rounded-full" />
-        </div>
-
+      <div
+        className="min-h-screen flex items-center justify-center bg-white"
+        role="status"
+        aria-live="polite"
+      >
         <div className="flex flex-col items-center gap-3">
 
-          {/* Loader */}
-          <div className="relative">
-            <div className="h-12 w-12 rounded-full border-2 border-white/10 border-t-indigo-500 animate-spin" />
-          </div>
+          {/* Spinner */}
+          <div className="h-10 w-10 border-2 border-slate-200 border-t-slate-900 rounded-full animate-spin" />
 
-          <p className="text-sm text-white/60">
-            Verifying session...
+          <p className="text-sm text-slate-500">
+            Checking your session...
           </p>
         </div>
       </div>
     );
   }
 
-  // ❌ Not Authenticated
+  /* ---------------- NOT AUTHENTICATED ---------------- */
   if (!isAuthenticated) {
     return (
       <Navigate
         to="/login"
         replace
-        state={{ from: location.pathname }}
+        state={{ from: location }} // full redirect support
       />
     );
   }
 
-  // ✅ Authorized
-  return children ? children : <Outlet />;
+  /* ---------------- AUTHORIZED ---------------- */
+  return children || <Outlet />;
 }

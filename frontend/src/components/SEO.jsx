@@ -1,55 +1,75 @@
 import { Helmet } from "react-helmet-async";
 
 /**
- * High-Wow Dynamic SEO & Social Metadata Engine
- * Standardized for Production Excellence
+ * SEO Component
+ * Fully optimized for SSR, social sharing, and product schema
  */
-export default function SEO({ 
-  title, 
-  description, 
-  image, 
-  url, 
+export default function SEO({
+  title,
+  description,
+  image,
+  url,
   type = "website",
   price,
   currency = "INR",
   availability = "InStock"
 }) {
   const siteTitle = "Doller Coach";
-  const fullTitle = title ? `${title} | ${siteTitle}` : `${siteTitle} | Premium Aesthetic Apparel`;
-  const siteDescription = "Premium aesthetic apparel engineered for precision and style. Explore our exclusive collections.";
-  const metaDescription = description || siteDescription;
-  
-  const siteUrl = window.location.origin;
-  const fullUrl = url ? `${siteUrl}${url}` : window.location.href;
-  const siteImage = "https://dollercoach.com/og-default.jpg"; // Default fallback
-  const metaImage = image || siteImage;
+  const defaultDescription =
+    "Premium clothing designed for everyday comfort and style.";
 
-  // Google Structured Data (JSON-LD) for Products
-  const structuredData = price ? {
-    "@context": "https://schema.org/",
-    "@type": "Product",
-    "name": title,
-    "image": [metaImage],
-    "description": metaDescription,
-    "brand": { "@type": "Brand", "name": "Doller Coach" },
-    "offers": {
-      "@type": "Offer",
-      "url": fullUrl,
-      "priceCurrency": currency,
-      "price": price,
-      "itemCondition": "https://schema.org/NewCondition",
-      "availability": `https://schema.org/${availability}`
-    }
-  } : null;
+  const fullTitle = title
+    ? `${title} | ${siteTitle}`
+    : `${siteTitle} | Premium Clothing`;
+
+  const metaDescription = description || defaultDescription;
+
+  const siteUrl =
+    typeof window !== "undefined"
+      ? window.location.origin
+      : "https://dollercoach.com";
+
+  const fullUrl = url ? `${siteUrl}${url}` : siteUrl;
+
+  const fallbackImage = "https://dollercoach.com/og-default.jpg";
+  const metaImage = image || fallbackImage;
+
+  /* ---------------- STRUCTURED DATA ---------------- */
+  const structuredData =
+    title && price
+      ? {
+        "@context": "https://schema.org/",
+        "@type": "Product",
+        name: title,
+        image: [metaImage],
+        description: metaDescription,
+        brand: {
+          "@type": "Brand",
+          name: siteTitle
+        },
+        offers: {
+          "@type": "Offer",
+          url: fullUrl,
+          priceCurrency: currency,
+          price: String(price),
+          availability: `https://schema.org/${availability}`,
+          itemCondition: "https://schema.org/NewCondition"
+        }
+      }
+      : null;
 
   return (
-    <Helmet>
-      {/* 1. Basic Metadata */}
+    <Helmet prioritizeSeoTags>
+
+      {/* BASIC */}
       <title>{fullTitle}</title>
       <meta name="description" content={metaDescription} />
       <link rel="canonical" href={fullUrl} />
 
-      {/* 2. OpenGraph (Facebook / WhatsApp / LinkedIn) */}
+      {/* ROBOTS */}
+      <meta name="robots" content="index, follow" />
+
+      {/* OPEN GRAPH */}
       <meta property="og:type" content={type} />
       <meta property="og:title" content={fullTitle} />
       <meta property="og:description" content={metaDescription} />
@@ -57,13 +77,13 @@ export default function SEO({
       <meta property="og:url" content={fullUrl} />
       <meta property="og:site_name" content={siteTitle} />
 
-      {/* 3. Twitter Card */}
+      {/* TWITTER */}
       <meta name="twitter:card" content="summary_large_image" />
       <meta name="twitter:title" content={fullTitle} />
       <meta name="twitter:description" content={metaDescription} />
       <meta name="twitter:image" content={metaImage} />
 
-      {/* 4. Google Structured Data (JSON-LD) */}
+      {/* STRUCTURED DATA */}
       {structuredData && (
         <script type="application/ld+json">
           {JSON.stringify(structuredData)}
