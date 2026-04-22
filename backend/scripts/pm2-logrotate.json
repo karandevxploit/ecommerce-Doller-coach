@@ -1,0 +1,24 @@
+{
+  "apps": [
+    {
+      "name": "ecommerce-backend",
+      "max_size": "50M",
+      "retain": 14,
+      "compress": true,
+      "dateFormat": "YYYY-MM-DD",
+      "rotateModule": true,
+      "worker_interval": 86400,
+      "watch": false
+    },
+    {
+      "name": "ecommerce-worker", 
+      "max_size": "20M",
+      "retain": 7,
+      "compress": true,
+      "dateFormat": "YYYY-MM-DD",
+      "rotateModule": true,
+      "worker_interval": 86400,
+      "watch": false
+    }
+  ]
+}

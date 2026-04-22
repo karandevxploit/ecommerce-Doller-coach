@@ -1,61 +1,90 @@
 const axios = require("axios");
 
-const BASE_URL = "http://localhost:7000/api";
-const ADMIN_SECRET = "karan_super_admin_key_123";
+const BASE_URL = process.env.BASE_URL || "http://localhost:7000/api";
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
+
+if (!ADMIN_SECRET) {
+  console.error("❌ ADMIN_SECRET missing");
+  process.exit(1);
+}
 
 async function verify() {
   const email = `admin_test_${Date.now()}@example.com`;
-  const password = "password123";
-  const name = "Test Admin";
+  const password = "Test@1234";
 
-  console.log("--- START VERIFICATION ---");
+  let token = null;
+
+  console.log("🚀 START ADMIN FLOW TEST\n");
 
   try {
-    // 1. Check if admin exists
-    console.log("Checking if admin exists...");
-    const existsRes = await axios.get(`${BASE_URL}/auth/admin-exists`);
-    console.log("Admin exists:", existsRes.data.exists);
+    // 1. Register Admin
+    console.log("🔹 Registering admin...");
+    const regRes = await axios.post(`${BASE_URL}/auth/admin-register`, {
+      name: "Test Admin",
+      email,
+      password,
+      secret: ADMIN_SECRET,
+      provider: "email"
+    });
 
-    if (existsRes.data.exists) {
-      console.log("Admin already exists. Skipping registration test or using existing admin.");
-      // I'll try to login with a known account if I had one, but better to test the whole flow.
-      // For this test, I'll just assume I can register if it doesn't exist.
-    } else {
-      // 2. Register Admin
-      console.log(`Registering admin: ${email}...`);
-      const regRes = await axios.post(`${BASE_URL}/auth/admin-register`, {
-        name,
-        email,
-        password,
-        secret: ADMIN_SECRET,
-        provider: "email"
-      });
-      console.log("Register Response:", regRes.data);
-      if (regRes.status === 201) console.log("✅ Admin Registration Success (201)");
+    if (regRes.status !== 201) {
+      throw new Error("Registration failed");
     }
 
-    // 3. Login Admin
-    // If I just registered, I use that email. If not, I'll need a valid email.
-    const loginEmail = existsRes.data.exists ? "admin@example.com" : email; // Fallback to something if exists
-    
-    console.log(`Logging in admin: ${loginEmail}...`);
+    console.log("✅ Registration success");
+
+    // 2. Login
+    console.log("🔹 Logging in...");
+    const loginRes = await axios.post(`${BASE_URL}/auth/admin-login`, {
+      email,
+      password,
+      provider: "email"
+    });
+
+    if (loginRes.status !== 200) {
+      throw new Error("Login failed");
+    }
+
+    token = loginRes.data.token;
+
+    if (!token) {
+      throw new Error("Token missing in login response");
+    }
+
+    console.log("✅ Login success");
+
+    // 3. Verify token (protected route)
+    console.log("🔹 Verifying token access...");
+    const profileRes = await axios.get(`${BASE_URL}/auth/profile`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (profileRes.data.role !== "admin") {
+      throw new Error("User is not admin");
+    }
+
+    console.log("✅ Admin role verified");
+
+    // 4. Negative test
+    console.log("🔹 Testing invalid login...");
     try {
-        const loginRes = await axios.post(`${BASE_URL}/auth/admin-login`, {
-          email: loginEmail,
-          password: password,
-          provider: "email"
-        });
-        console.log("Login Response:", loginRes.data);
-        if (loginRes.status === 200) console.log("✅ Admin Login Success (200)");
-    } catch (err) {
-        console.error("❌ Login failed:", err.response?.data || err.message);
+      await axios.post(`${BASE_URL}/auth/admin-login`, {
+        email,
+        password: "wrongpassword"
+      });
+      throw new Error("Invalid login should fail");
+    } catch {
+      console.log("✅ Invalid login rejected");
     }
+
+    console.log("\n🎉 ALL TESTS PASSED");
 
   } catch (err) {
-    console.error("❌ Verification failed:", err.response?.data || err.message);
+    console.error("\n❌ TEST FAILED:", err.message);
+    process.exit(1);
   }
 
-  console.log("--- END ---");
+  process.exit(0);
 }
 
 verify();

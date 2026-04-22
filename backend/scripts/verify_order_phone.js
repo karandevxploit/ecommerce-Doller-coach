@@ -1,53 +1,106 @@
 const mongoose = require("mongoose");
-const Order = require("./models/order.model");
-const orderService = require("./services/order.service");
 const dotenv = require("dotenv");
 const path = require("path");
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
+const Order = require("./models/order.model");
+const orderService = require("./services/order.service");
+
+const FORCE = process.argv.includes("--force");
+
+if (process.env.NODE_ENV === "production" && !FORCE) {
+  console.error("❌ BLOCKED: Use --force in production");
+  process.exit(1);
+}
+
+function assert(cond, msg) {
+  if (!cond) throw new Error("ASSERT FAIL: " + msg);
+}
+
 async function verifyOrderPhone() {
   await mongoose.connect(process.env.MONGO_URI);
-  console.log("Connected to MongoDB for verification\n");
+
+  let order;
 
   try {
-    const testUserId = new mongoose.Types.ObjectId();
-    const testOrderData = {
-      products: [],
-      subtotalAmount: 1000,
-      discountAmount: 0,
-      totalAmount: 1000,
-      address: {
+    console.log("🚀 Verifying shippingAddress phone logic...\n");
+
+    const userId = new mongoose.Types.ObjectId();
+
+    order = await orderService.createOrder(userId, {
+      products: [{
+        productId: new mongoose.Types.ObjectId(),
+        quantity: 1,
+        price: 1000
+      }],
+      subtotal: 1000,
+      total: 1000,
+      paymentMethod: "COD",
+      shippingAddress: {
         name: "John Doe",
         phone: "9876543210",
-        addressLine1: "Test Street 123",
+        address: "Test Street 123",
         city: "Mumbai",
         state: "Maharashtra",
         pincode: "400001"
-      },
-      paymentMethod: "COD"
-    };
+      }
+    });
 
-    console.log("Creating test order using OrderService...");
-    const order = await orderService.createOrder(testUserId, testOrderData);
+    const phone = order.shippingAddress?.phone;
 
-    console.log("Order Created with ID:", order._id);
-    console.log("Saved address String:", order.address);
-    console.log("Saved shippingAddress Phone:", order.shippingAddress.phone);
+    // ✅ Existence check
+    assert(phone !== undefined, "Phone missing");
 
-    if (order.shippingAddress.phone === "9876543210") {
-      console.log("✅ Passed: Phone number correctly saved in shippingAddress");
-    } else {
-      console.log("❌ Failed: Phone number not saved correctly");
+    // ✅ Value check
+    assert(phone === "9876543210", "Phone value incorrect");
+
+    // ✅ Format check
+    assert(/^[6-9]\d{9}$/.test(phone), "Phone format invalid");
+
+    console.log("✅ Phone correctly stored in shippingAddress");
+
+    // 🔥 Migration validation
+    assert(!order.address, "Legacy address field still exists");
+
+    console.log("✅ Legacy address field removed");
+
+    // ❌ Negative test
+    let failed = false;
+    try {
+      await orderService.createOrder(userId, {
+        products: [{
+          productId: new mongoose.Types.ObjectId(),
+          quantity: 1,
+          price: 1000
+        }],
+        subtotal: 1000,
+        total: 1000,
+        paymentMethod: "COD",
+        shippingAddress: {
+          name: "Test",
+          phone: "123", // invalid
+          address: "Test",
+          city: "Test",
+          state: "Test",
+          pincode: "123456"
+        }
+      });
+    } catch {
+      failed = true;
     }
 
-    // Cleanup
-    await Order.deleteOne({ _id: order._id });
-    console.log("\nCleanup completed.");
+    assert(failed, "Invalid phone should fail");
 
-  } catch (error) {
-    console.error("Verification error:", error);
+    console.log("✅ Negative validation passed");
+
+    console.log("\n🎉 ALL TESTS PASSED");
+
+  } catch (err) {
+    console.error("\n❌ TEST FAILED:", err.message);
+    process.exit(1);
   } finally {
+    if (order) await Order.deleteOne({ _id: order._id });
     await mongoose.connection.close();
   }
 }

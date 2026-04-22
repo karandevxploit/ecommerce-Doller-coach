@@ -11,13 +11,13 @@ async function checkDummyImages() {
   console.log("Connected to MongoDB");
 
   const dummyUrl = "https://images.unsplash.com/photo-1591047139829-d91aecb6caea";
-  
+
   const productsWithDummy = await Product.find({
     images: { $regex: dummyUrl }
   });
 
   console.log(`Found ${productsWithDummy.length} products with dummy images.`);
-  
+
   productsWithDummy.forEach(p => {
     console.log(`- ${p.title} (${p.category})`);
   });

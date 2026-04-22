@@ -1,51 +1,100 @@
-const mongoose = require('mongoose');
-require('dotenv').config();
+const mongoose = require("mongoose");
+require("dotenv").config();
+const fs = require("fs");
+
+const BATCH_SIZE = 500;
+const DRY_RUN = process.argv.includes("--dry-run");
 
 const reconcile = async () => {
     try {
-        const uri = process.env.MONGO_URI;
-        if (!uri) throw new Error("MONGO_URI not found");
+        if (!process.env.MONGO_URI) throw new Error("MONGO_URI not found");
 
-        await mongoose.connect(uri);
-        const Order = require('../models/order.model');
-        
-        console.log("Starting GST Reconciliation...");
+        await mongoose.connect(process.env.MONGO_URI, {
+            serverSelectionTimeoutMS: 5000,
+            maxPoolSize: 10
+        });
 
-        // 1. Find ANY order where subtotal exists (regardless of type)
-        const allOrders = await Order.find({ subtotal: { $exists: true } }).lean();
-        console.log(`Analyzing ${allOrders.length} orders total...`);
+        const Order = require("../models/order.model");
 
-        let updatedCount = 0;
-        for (const order of allOrders) {
+        console.log("🚀 Starting SAFE GST Reconciliation...\n");
+
+        const cursor = Order.find({
+            subtotal: { $exists: true },
+            paymentStatus: { $ne: "PAID" },          // 🔥 CRITICAL SAFETY
+            reconciliationVersion: { $ne: 1 }
+        }).cursor();
+
+        let bulkOps = [];
+        let processed = 0;
+        let updated = 0;
+
+        const audit = [];
+
+        for await (const order of cursor) {
+            processed++;
+
             const subtotal = Number(order.subtotal || 0);
             const discount = Number(order.discount || 0);
-            const expectedGst = Math.round(subtotal * 0.18);
-            const expectedTotal = subtotal - discount + expectedGst;
 
-            // Check if reconciliation is needed
-            if (order.gst !== expectedGst || order.total !== expectedTotal || order.delivery !== 0) {
-                console.log(`Fixing #${String(order._id).slice(-6).toUpperCase()} | Sub: ${subtotal} | OldGst: ${order.gst} -> New: ${expectedGst}`);
-                
-                await Order.collection.updateOne(
-                    { _id: order._id },
-                    { 
-                        $set: { 
-                            gst: expectedGst, 
-                            total: expectedTotal, 
-                            delivery: 0,
-                            subtotal: subtotal,
-                            discount: discount 
+            const gstPercent = order.gstPercent ?? 18;
+            const expectedGst = Math.round((subtotal * gstPercent) / 100);
+
+            const expectedTotal = subtotal - discount + expectedGst + (order.delivery || 0);
+
+            if (
+                order.gst === expectedGst &&
+                order.total === expectedTotal
+            ) {
+                continue;
+            }
+
+            bulkOps.push({
+                updateOne: {
+                    filter: { _id: order._id },
+                    update: {
+                        $set: {
+                            gst: expectedGst,
+                            total: expectedTotal,
+                            reconciliationVersion: 1
                         }
                     }
-                );
-                updatedCount++;
+                }
+            });
+
+            audit.push({
+                id: order._id,
+                old: { gst: order.gst, total: order.total },
+                new: { gst: expectedGst, total: expectedTotal }
+            });
+
+            if (bulkOps.length >= BATCH_SIZE) {
+                if (!DRY_RUN) {
+                    const res = await Order.bulkWrite(bulkOps);
+                    updated += res.modifiedCount;
+                }
+                bulkOps = [];
             }
         }
 
-        console.log(`Successfully reconciled ${updatedCount} orders.`);
+        if (bulkOps.length && !DRY_RUN) {
+            const res = await Order.bulkWrite(bulkOps);
+            updated += res.modifiedCount;
+        }
+
+        fs.writeFileSync(
+            `gst_reconciliation_${Date.now()}.json`,
+            JSON.stringify(audit.slice(0, 1000), null, 2)
+        );
+
+        console.log(`Processed: ${processed}`);
+        console.log(`Updated: ${updated}`);
+        console.log(`Mode: ${DRY_RUN ? "DRY RUN" : "LIVE"}`);
+
+        await mongoose.disconnect();
         process.exit(0);
+
     } catch (err) {
-        console.error("CRITICAL RECONCILIATION ERROR:", err.message);
+        console.error("❌ CRITICAL ERROR:", err.message);
         process.exit(1);
     }
 };

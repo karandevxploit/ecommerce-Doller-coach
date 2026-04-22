@@ -2,63 +2,119 @@ const mongoose = require("mongoose");
 const Order = require("./models/order.model");
 const dotenv = require("dotenv");
 const path = require("path");
+const fs = require("fs");
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
-async function migrateOrders() {
-  await mongoose.connect(process.env.MONGO_URI);
-  console.log("Connected to MongoDB for migration\n");
+const BATCH_SIZE = 500;
+const DRY_RUN = process.argv.includes("--dry-run");
 
-  try {
-    // Find orders with missing shippingAddress.phone or missing structured data
-    const orders = await Order.find({
-      $or: [
-        { "shippingAddress.phone": { $exists: false } },
-        { "shippingAddress.phone": "" },
-        { "shippingAddress.address": { $exists: false } }
-      ]
-    });
+function extractPhone(str = "") {
+  const match = str.match(/\b(\+91)?\d{10}\b/);
+  if (!match) return "";
 
-    console.log(`Found ${orders.length} orders requiring migration.`);
+  let phone = match[0];
 
-    let updatedCount = 0;
-
-    for (const order of orders) {
-      const addressStr = order.address || "";
-      
-      // Attempt to extract 10-digit phone number
-      const phoneMatch = addressStr.match(/(\+91)?\d{10}/);
-      const extractedPhone = phoneMatch ? phoneMatch[0] : "";
-
-      // Attempt to extract city/state/pincode if possible (very basic)
-      // Name, House, Street, City, State - Pincode
-      const parts = addressStr.split(",").map(s => s.trim());
-      
-      const newShippingAddress = {
-        name: order.shippingAddress?.name || (parts[0] || "Customer"),
-        phone: order.shippingAddress?.phone || extractedPhone || "",
-        address: order.shippingAddress?.address || addressStr,
-        city: order.shippingAddress?.city || "",
-        state: order.shippingAddress?.state || "",
-        pincode: order.shippingAddress?.pincode || ""
-      };
-
-      // Only update if we actually found something to fill
-      if (!order.shippingAddress?.phone || !order.shippingAddress?.address) {
-        await Order.updateOne(
-          { _id: order._id },
-          { $set: { shippingAddress: newShippingAddress } }
-        );
-        updatedCount++;
-      }
-    }
-
-    console.log(`Successfully migrated ${updatedCount} orders.`);
-  } catch (error) {
-    console.error("Migration error:", error);
-  } finally {
-    await mongoose.connection.close();
+  // normalize
+  if (phone.startsWith("+91")) {
+    phone = phone.slice(3);
   }
+
+  return phone;
 }
 
-migrateOrders();
+function buildUpdate(order) {
+  const addressStr = order.address || "";
+
+  const phone = extractPhone(addressStr);
+
+  const parts = addressStr.split(",").map(s => s.trim());
+
+  const update = {};
+
+  if (!order.shippingAddress?.phone && phone) {
+    update["shippingAddress.phone"] = phone;
+  }
+
+  if (!order.shippingAddress?.address && addressStr) {
+    update["shippingAddress.address"] = addressStr;
+  }
+
+  if (!order.shippingAddress?.name && parts[0]) {
+    update["shippingAddress.name"] = parts[0];
+  }
+
+  return update;
+}
+
+async function migrateOrders() {
+  await mongoose.connect(process.env.MONGO_URI, {
+    serverSelectionTimeoutMS: 5000,
+    maxPoolSize: 10
+  });
+
+  console.log("🚀 Starting safe order migration...\n");
+
+  const cursor = Order.find({
+    $or: [
+      { "shippingAddress.phone": { $exists: false } },
+      { "shippingAddress.phone": "" },
+      { "shippingAddress.address": { $exists: false } }
+    ]
+  }).cursor();
+
+  let bulkOps = [];
+  let processed = 0;
+  let updated = 0;
+
+  const audit = [];
+
+  for await (const order of cursor) {
+    processed++;
+
+    const updateFields = buildUpdate(order);
+
+    if (Object.keys(updateFields).length === 0) continue;
+
+    bulkOps.push({
+      updateOne: {
+        filter: { _id: order._id },
+        update: { $set: updateFields }
+      }
+    });
+
+    audit.push({
+      id: order._id,
+      applied: updateFields
+    });
+
+    if (bulkOps.length >= BATCH_SIZE) {
+      if (!DRY_RUN) {
+        const res = await Order.bulkWrite(bulkOps);
+        updated += res.modifiedCount;
+      }
+      bulkOps = [];
+    }
+  }
+
+  if (bulkOps.length && !DRY_RUN) {
+    const res = await Order.bulkWrite(bulkOps);
+    updated += res.modifiedCount;
+  }
+
+  fs.writeFileSync(
+    `order_migration_log_${Date.now()}.json`,
+    JSON.stringify(audit.slice(0, 1000), null, 2)
+  );
+
+  console.log(`\nProcessed: ${processed}`);
+  console.log(`Updated: ${updated}`);
+  console.log(`Mode: ${DRY_RUN ? "DRY RUN" : "LIVE"}`);
+
+  await mongoose.connection.close();
+}
+
+migrateOrders().catch(err => {
+  console.error("❌ Migration failed:", err);
+  process.exit(1);
+});

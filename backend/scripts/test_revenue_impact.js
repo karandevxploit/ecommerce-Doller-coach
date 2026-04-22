@@ -1,71 +1,98 @@
 const mongoose = require("mongoose");
-const Order = require("./models/order.model");
-const adminController = require("./controllers/admin.controller");
-const orderController = require("./controllers/order.controller");
 const dotenv = require("dotenv");
 const path = require("path");
 
 dotenv.config({ path: path.join(__dirname, ".env") });
 
+const Order = require("./models/order.model");
+const adminController = require("./controllers/admin.controller");
+
+const FORCE = process.argv.includes("--force");
+
+if (process.env.NODE_ENV === "production" && !FORCE) {
+  console.error("❌ BLOCKED: Use --force to run in production");
+  process.exit(1);
+}
+
+async function getRevenue() {
+  return new Promise((resolve) => {
+    adminController.stats({}, {
+      json: (data) => resolve(data.totalRevenue || 0)
+    });
+  });
+}
+
 async function testRevenueImpact() {
   await mongoose.connect(process.env.MONGO_URI);
-  console.log("Connected to MongoDB for revenue impact test\n");
+
+  let testOrder = null;
 
   try {
-    // 1. Get Initial Revenue
-    const req = {};
-    const res = { json: (data) => data };
-    const initialStats = await new Promise((resolve) => {
-      adminController.stats(req, { json: resolve });
-    });
-    const initialRevenue = initialStats.totalRevenue;
-    console.log(`Initial Total Revenue: ₹${initialRevenue}`);
+    console.log("🚀 Starting Revenue Impact Test...\n");
 
-    // 2. Create a test PAID order
-    const testAmount = 500;
-    const testOrder = await Order.create({
+    const initialRevenue = await getRevenue();
+    console.log(`Initial Revenue: ₹${initialRevenue}`);
+
+    const subtotal = 500;
+    const gst = Math.round(subtotal * 0.18);
+    const delivery = 0;
+    const total = subtotal + gst + delivery;
+
+    testOrder = await Order.create({
       userId: new mongoose.Types.ObjectId(),
-      products: [{ productId: new mongoose.Types.ObjectId(), title: "Test Product", quantity: 1, price: testAmount }],
-      totalAmount: testAmount,
+      products: [{
+        productId: new mongoose.Types.ObjectId(),
+        title: "Test Product",
+        quantity: 1,
+        price: subtotal
+      }],
+      subtotal,
+      gst,
+      delivery,
+      total,
       paymentMethod: "ONLINE",
       paymentStatus: "PENDING",
       isPaid: false,
-      address: "Test Address",
-      shippingAddress: { name: "Test", phone: "1234567890", address: "Test", city: "Test", state: "Test", pincode: "123456" }
+      shippingAddress: {
+        fullName: "Test",
+        phone: "9999999999"
+      }
     });
-    console.log(`Created PENDING test order with ID: ${testOrder._id} for ₹${testAmount}`);
 
-    // 3. Mark as PAID via the new logic
-    await Order.findByIdAndUpdate(testOrder._id, {
-      isPaid: true,
-      paymentStatus: "PAID",
-      paidAt: new Date()
-    });
-    console.log("Marked test order as PAID.");
+    console.log(`Created order: ${testOrder._id}`);
 
-    // 4. Verify Final Revenue
-    const finalStats = await new Promise((resolve) => {
-      adminController.stats(req, { json: resolve });
-    });
-    const finalRevenue = finalStats.totalRevenue;
-    console.log(`Final Total Revenue: ₹${finalRevenue}`);
+    // Simulate payment success
+    testOrder.paymentStatus = "PAID";
+    testOrder.isPaid = true;
+    testOrder.paidAt = new Date();
 
-    const difference = finalRevenue - initialRevenue;
-    console.log(`Revenue Difference: ₹${difference}`);
+    await testOrder.save(); // 🔥 triggers hooks
 
-    if (difference === testAmount) {
-      console.log("\n✅ SUCCESS: Revenue updated immediately and accurately.");
+    console.log("Marked order as PAID");
+
+    // Wait for consistency (important if caching exists)
+    await new Promise(res => setTimeout(res, 1000));
+
+    const finalRevenue = await getRevenue();
+    console.log(`Final Revenue: ₹${finalRevenue}`);
+
+    const diff = finalRevenue - initialRevenue;
+
+    console.log(`Difference: ₹${diff}`);
+
+    if (Math.abs(diff - total) <= 1) {
+      console.log("\n✅ PASS: Revenue updated correctly");
     } else {
-      console.log("\n❌ FAILURE: Revenue mismatch. Expected ₹" + testAmount + " increase.");
+      console.log(`\n❌ FAIL: Expected ₹${total}, got ₹${diff}`);
     }
 
-    // Cleanup
-    await Order.deleteOne({ _id: testOrder._id });
-    console.log("\nCleanup completed.");
-
-  } catch (error) {
-    console.error("Test Error:", error);
+  } catch (err) {
+    console.error("❌ Test Failed:", err);
   } finally {
+    if (testOrder) {
+      await Order.deleteOne({ _id: testOrder._id });
+      console.log("🧹 Cleanup done");
+    }
     await mongoose.connection.close();
   }
 }
