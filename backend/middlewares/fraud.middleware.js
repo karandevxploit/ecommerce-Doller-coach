@@ -1,81 +1,163 @@
-const Redis = require("ioredis");
+const redis = require("../config/redis");
 const env = require("../config/env");
 const { fail } = require("../utils/apiResponse");
-const logger = require("../utils/logger");
+const { logger } = require("../utils/logger");
 
-let redis;
-if (env.REDIS_URL) {
-  redis = new Redis(env.REDIS_URL);
-}
+// ===============================
+// CONFIG
+// ===============================
+const PAYMENT_LIMIT = 5;
+const WINDOW = 3600; // 1 hour
+const SIGNATURE_LIMIT = 3;
+const BLOCK_WINDOW = 86400; // 24 hours
 
-/**
- * Specialized Fraud Prevention Middleware
- */
+// ===============================
+// HELPER: SAFE IP (PROXY SAFE)
+// ===============================
+const getIp = (req) => {
+  return (
+    req.headers["x-forwarded-for"]?.split(",")[0] ||
+    req.socket?.remoteAddress ||
+    req.ip ||
+    "unknown"
+  );
+};
 
-// 1. Payment Attempt Rate Limiting (Prevents carding attacks)
+// ===============================
+// HELPER: REDIS SAFE
+// ===============================
+const isRedisReady = () =>
+  redis && redis.status === "ready";
+
+// ===============================
+// PAYMENT RATE LIMIT
+// ===============================
 exports.paymentRateLimit = async (req, res, next) => {
-  if (!redis) return next();
+  if (!isRedisReady()) return next();
 
-  const ip = req.ip || req.headers["x-forwarded-for"];
-  const userId = req.user?._id;
-  const key = `fraud:payment_limit:${userId || ip}`;
-  
+  const ip = getIp(req);
+  const userId = req.user?._id || "guest";
+
+  const key = `fraud:pay:${userId}:${ip}`;
+
   try {
     const attempts = await redis.incr(key);
+
     if (attempts === 1) {
-      await redis.expire(key, 3600); // 1-hour window
+      await redis.expire(key, WINDOW);
     }
 
-    if (attempts > 5) {
-      logger.warn(`SUSPICIOUS ACTIVITY: Too many payment attempts from ${userId || ip}`);
-      return fail(res, "Excessive payment attempts. Please wait 1 hour.", 429);
+    if (attempts > PAYMENT_LIMIT) {
+      logger.warn("[FRAUD_RATE_LIMIT]", {
+        ip,
+        userId,
+        attempts,
+      });
+
+      return fail(
+        res,
+        "Too many payment attempts. Try again later.",
+        429
+      );
     }
   } catch (err) {
-    logger.error("Fraud Check Error:", err);
+    logger.error("[FRAUD_RATE_ERROR]", err.message);
   }
-  
+
   next();
 };
 
-// 2. Signature Failure Tracking (Prevents brute-forcing verification signatures)
+// ===============================
+// SIGNATURE FAILURE TRACK
+// ===============================
 exports.trackSignatureFailure = async (identifier) => {
-  if (!redis) return;
+  if (!isRedisReady()) return;
 
-  const key = `fraud:signature_failures:${identifier}`;
+  const key = `fraud:sig:${identifier}`;
+
   try {
     const failures = await redis.incr(key);
+
     if (failures === 1) {
-      await redis.expire(key, 86400); // 24-hour ban window
+      await redis.expire(key, BLOCK_WINDOW);
     }
 
-    if (failures >= 3) {
-      logger.error(`BLOCKING POTENTIAL ATTACKER: Repeated signature failures for ${identifier}`);
-      // In a real app, you might also flag the user account in DB
+    if (failures >= SIGNATURE_LIMIT) {
+      logger.error("[FRAUD_SIGNATURE_BLOCK]", {
+        identifier,
+        failures,
+      });
+
+      // Future: push to DB / alert system
     }
   } catch (err) {
-    logger.error("Failure tracking error:", err);
+    logger.error("[FRAUD_SIG_ERROR]", err.message);
   }
 };
 
-// 3. Block check for known fraud IPs/Users
+// ===============================
+// BLOCK CHECK
+// ===============================
 exports.checkFraudBlock = async (req, res, next) => {
-  if (!redis) return next();
+  if (!isRedisReady()) return next();
 
-  const ip = req.ip;
-  const userId = req.user?._id;
-  
+  const ip = getIp(req);
+  const userId = req.user?._id || null;
+
   try {
-    const [ipFailures, userFailures] = await Promise.all([
-      redis.get(`fraud:signature_failures:${ip}`),
-      userId ? redis.get(`fraud:signature_failures:${userId}`) : "0"
+    const [ipFail, userFail] = await Promise.all([
+      redis.get(`fraud:sig:${ip}`),
+      userId ? redis.get(`fraud:sig:${userId}`) : "0",
     ]);
 
-    if (parseInt(ipFailures) >= 3 || parseInt(userFailures) >= 3) {
-      logger.error(`DENIED ACCESS: Blocked user/IP attempted payment route: ${userId || ip}`);
-      return fail(res, "Your account is temporarily restricted from making payments due to suspicious activity.", 403);
+    if (
+      parseInt(ipFail || 0) >= SIGNATURE_LIMIT ||
+      parseInt(userFail || 0) >= SIGNATURE_LIMIT
+    ) {
+      logger.error("[FRAUD_BLOCKED]", {
+        ip,
+        userId,
+      });
+
+      return fail(
+        res,
+        "Payment access temporarily blocked due to suspicious activity.",
+        403
+      );
     }
   } catch (err) {
-    logger.error("Fraud Block Check Error:", err);
+    logger.error("[FRAUD_BLOCK_ERROR]", err.message);
+  }
+
+  next();
+};
+
+// ===============================
+// GLOBAL RATE LIMIT (ADVANCED)
+// ===============================
+exports.globalRateLimit = async (req, res, next) => {
+  if (!isRedisReady()) return next();
+
+  const key = "fraud:global";
+
+  try {
+    const count = await redis.incr(key);
+
+    if (count === 1) {
+      await redis.expire(key, 60); // 1 min window
+    }
+
+    if (count > 1000) {
+      logger.error("[FRAUD_GLOBAL_SPIKE]", { count });
+
+      return fail(
+        res,
+        "Server busy. Try again later.",
+        503
+      );
+    }
+  } catch (err) {
+    logger.error("[FRAUD_GLOBAL_ERROR]", err.message);
   }
 
   next();

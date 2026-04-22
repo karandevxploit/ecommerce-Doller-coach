@@ -1,69 +1,120 @@
 const AuthService = require("../services/auth.service");
-const User = require("../models/user.model");
-const logger = require("../utils/logger");
-const { fail } = require("../utils/apiResponse");
+const { logger } = require("../utils/logger");
+const AppError = require("../utils/AppError");
+const asyncHandler = require("express-async-handler");
+const crypto = require("crypto");
 
-exports.isAuthenticated = async (req, res, next) => {
+// ===============================
+// HELPER: EXTRACT TOKEN
+// ===============================
+const extractToken = (req) => {
+  const authHeader = req.headers.authorization;
+
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    return authHeader.split(" ")[1];
+  }
+
+  if (req.cookies?.accessToken) {
+    return req.cookies.accessToken;
+  }
+
+  return null;
+};
+
+// ===============================
+// HELPER: REQUEST ID
+// ===============================
+const getRequestId = (req) => {
+  return req.headers["x-request-id"] || crypto.randomUUID();
+};
+
+// ===============================
+// AUTHENTICATION MIDDLEWARE
+// ===============================
+exports.isAuthenticated = asyncHandler(async (req, res, next) => {
+  const requestId = getRequestId(req);
+  req.requestId = requestId;
+
+  const token = extractToken(req);
+
+  if (!token) {
+    logger.warn("[AUTH_NO_TOKEN]", { requestId, ip: req.ip });
+    return next(new AppError("Authentication required", 401));
+  }
+
   try {
-    let token = req.cookies?.accessToken;
+    const result = AuthService.verifyAccessToken(token);
 
-    if (!token) {
-      const authHeader = req.headers.authorization;
-      if (authHeader && authHeader.startsWith("Bearer ")) {
-        token = authHeader.split(" ")[1];
-      }
+    if (!result.valid) {
+      logger.warn("[AUTH_INVALID_TOKEN]", { requestId, reason: result.reason });
+      return next(new AppError("Invalid or expired session", 401));
     }
 
-    if (!token) {
-      return fail(res, "Authentication required", 401);
-    }
+    const decoded = result.data;
 
-    const decoded = AuthService.verifyAccessToken(token);
+    // Normalize role
+    const role = String(decoded.role || "user").toLowerCase();
 
-    if (!decoded) {
-      return res.status(401).json({ 
-        success: false, 
-        message: "Invalid or expired token", 
-        data: null,
-        code: "TOKEN_EXPIRED" 
-      });
-    }
+    req.user = {
+      id: decoded.id,
+      role,
+      email: decoded.email || null,
+    };
 
-    const user = await User.findById(decoded.id).lean();
-    if (!user) {
-      return fail(res, "User no longer exists", 401);
-    }
+    logger.debug("[AUTH_SUCCESS]", {
+      requestId,
+      userId: decoded.id,
+      role,
+    });
 
-    req.user = user;
     next();
   } catch (err) {
-    logger.error("Auth middleware error:", err);
-    next(err);
-  }
-};
+    logger.error("[AUTH_ERROR]", {
+      requestId,
+      message: err.message,
+      name: err.name,
+    });
 
+    return next(new AppError("Invalid or expired session", 401));
+  }
+});
+
+// ===============================
+// ADMIN CHECK
+// ===============================
 exports.isAdmin = (req, res, next) => {
-  if (!req.user) {
-    return fail(res, "Authentication required", 401);
-  }
+  if (!req.user || req.user.role !== "admin") {
+    logger.warn("[AUTH_ADMIN_DENIED]", {
+      ip: req.ip,
+      userId: req.user?.id || null,
+    });
 
-  if (req.user.role !== "admin") {
-    logger.warn(`Unauthorized admin access attempt by user: ${req.user._id}`);
-    return fail(res, "Access denied. Admin only.", 403);
+    return next(new AppError("Admin access required", 403));
   }
-
   next();
 };
 
-/**
- * Legacy support / Wrapper for existing routes
- */
-exports.protect = exports.isAuthenticated;
-exports.requireUser = exports.isAuthenticated;
-exports.requireAdmin = [exports.isAuthenticated, exports.isAdmin];
+// ===============================
+// ROLE-BASED AUTHORIZATION
+// ===============================
 exports.authorize = (...roles) => (req, res, next) => {
-  if (!req.user || !roles.includes(req.user.role)) {
-    return fail(res, "Forbidden", 403);
+  const normalizedRoles = roles.map((r) => String(r).toLowerCase());
+
+  if (!req.user || !normalizedRoles.includes(req.user.role)) {
+    logger.warn("[AUTH_ROLE_DENIED]", {
+      userId: req.user?.id,
+      role: req.user?.role,
+      required: normalizedRoles,
+    });
+
+    return next(new AppError("Access forbidden", 403));
   }
+
   next();
 };
+
+// ===============================
+// SHORTCUT EXPORTS
+// ===============================
+exports.protect = exports.isAuthenticated;
+exports.requireAdmin = [exports.isAuthenticated, exports.isAdmin];

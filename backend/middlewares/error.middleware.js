@@ -1,64 +1,119 @@
-const logger = require("../utils/logger");
-const env = require("../config/env");
+const { logger } = require("../utils/logger");
 
-function notFound(req, res) {
-  logger.warn(`Route not found: ${req.originalUrl}`);
-  res.status(404).json({ success: false, data: null, message: "Route not found" });
-}
+// ===============================
+// HELPERS
+// ===============================
+const isDev = process.env.NODE_ENV === "development";
 
-function errorHandler(err, req, res, _next) {
-  let status = err.statusCode || 500;
-  let message = err.message || "Internal Server Error";
-  let errorCode = err.errorCode || "INTERNAL_ERROR";
-  let errors = err.errors || undefined;
+// Safe JSON (avoid circular crash)
+const safeSerialize = (obj) => {
+  try {
+    return JSON.parse(JSON.stringify(obj));
+  } catch {
+    return { note: "Serialization failed" };
+  }
+};
 
-  // 1. Classification & Normalization
-  const isZod = err && (err.name === "ZodError" || err.constructor?.name === "ZodError");
-  const isMongoose = err && (err.name === "ValidationError" || err.name === "CastError");
+// Normalize known errors
+const normalizeError = (err) => {
+  let statusCode = err.statusCode || 500;
+  let message = err.message || "Internal server error";
+  let code = err.code || "INTERNAL_ERROR";
 
-  if (isZod || err.errorCode === "VALIDATION_FAILED") {
-    status = 400;
-    errorCode = "VALIDATION_FAILED";
-    message = "Validation failed for the requested resource.";
-  } else if (isMongoose) {
-    status = 400;
-    errorCode = "DATA_VALIDATION_ERROR";
-    if (err.name === "ValidationError") {
-      message = Object.values(err.errors).map(val => val.message).join(", ");
-    }
-  } else if (err.code === 11000) {
-    status = 409;
-    errorCode = "DUPLICATE_ENTRY";
-    message = "Data provided already exists.";
+  // Mongoose CastError
+  if (err.name === "CastError") {
+    statusCode = 400;
+    message = "Invalid ID format";
+    code = "INVALID_ID";
   }
 
-  // 2. Logging with Context
-  const logMethod = status >= 500 ? "error" : "warn";
-  const requestId = req.requestId || "no-trace";
+  // Validation error
+  if (err.name === "ValidationError") {
+    statusCode = 400;
+    message = "Validation failed";
+    code = "VALIDATION_ERROR";
+  }
 
-  logger[logMethod](`${req.method} ${req.originalUrl} - [${requestId}] - ${status} - ${errorCode} - ${message}`, {
-    stack: env.NODE_ENV === "development" ? err.stack : undefined,
-    user: req.user ? req.user._id : "anonymous",
-    isOperational: err.isOperational || false,
+  // Duplicate key
+  if (err.code === 11000) {
+    statusCode = 409;
+    message = "Duplicate resource";
+    code = "DUPLICATE";
+  }
+
+  return { statusCode, message, code };
+};
+
+// ===============================
+// ERROR HANDLER
+// ===============================
+const errorHandler = (err, req, res, next) => {
+  if (res.headersSent) return next(err);
+
+  const { statusCode, message, code } = normalizeError(err);
+
+  const requestId = req.requestId || "unknown";
+  const userId = req.user?.id || null;
+
+  // ===============================
+  // LOGGING (SMART)
+  // ===============================
+  const logPayload = {
     requestId,
-  });
+    path: req.originalUrl,
+    method: req.method,
+    statusCode,
+    userId,
+    ip: req.ip,
+    error: err.message,
+    stack: isDev ? err.stack : undefined,
+  };
 
-  // 3. Mask Internal Errors in Production
-  if (status === 500 && env.NODE_ENV === "production" && !err.isOperational) {
-    message = "A system error occurred. Our engineers are notified.";
-    errorCode = "INTERNAL_SERVER_ERROR";
+  if (statusCode >= 500) {
+    logger.error("[SERVER_ERROR]", safeSerialize(logPayload));
+  } else {
+    logger.warn("[CLIENT_ERROR]", safeSerialize(logPayload));
   }
 
-  // 4. Response Delivery
-  res.status(status).json({
+  // ===============================
+  // RESPONSE (SAFE)
+  // ===============================
+  const response = {
     success: false,
-    message,
-    errorCode,
-    errors,
-    requestId: (env.NODE_ENV === "development" || status >= 500) ? requestId : undefined,
-    stack: env.NODE_ENV === "development" ? err.stack : undefined,
+    code,
+    message:
+      statusCode >= 500 && !isDev
+        ? "Something went wrong"
+        : message,
+  };
+
+  if (isDev) {
+    response.stack = err.stack;
+  }
+
+  return res.status(statusCode).json(response);
+};
+
+// ===============================
+// 404 HANDLER
+// ===============================
+const notFound = (req, res) => {
+  return res.status(404).json({
+    success: false,
+    code: "NOT_FOUND",
+    message: `Route not found: ${req.originalUrl}`,
   });
-}
+};
 
-module.exports = { notFound, errorHandler };
+// ===============================
+// SAFE ASYNC WRAPPER
+// ===============================
+const safeHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
 
+module.exports = {
+  errorHandler,
+  notFound,
+  safeHandler,
+};

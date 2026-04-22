@@ -1,47 +1,105 @@
-const redis = require("../config/redis");
-const logger = require("../utils/logger");
+const { redis } = require("../config/redis");
+const { logger } = require("../utils/logger");
 
-/**
- * Protocol Governor Middleware
- * Detects and suppresses high-frequency request loops at the infrastructure level.
- */
+// ===============================
+// CONFIG
+// ===============================
+const SOFT_LIMIT = 20;     // warn / slow down
+const HARD_LIMIT = 50;     // block
+const LOCK_TIME = 300;     // 5 min
+const WINDOW = 1;          // seconds
+
+// ===============================
+// HELPER: SAFE IP
+// ===============================
+const getIp = (req) => {
+  return (
+    req.headers["x-forwarded-for"]?.split(",")[0] ||
+    req.socket?.remoteAddress ||
+    req.ip ||
+    "unknown"
+  );
+};
+
+const isRedisReady = () =>
+  redis && redis.status === "ready";
+
+// ===============================
+// GOVERNOR
+// ===============================
 const governor = async (req, res, next) => {
-  // Use IP or Session ID as target
-  const target = req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress;
-  const rpsKey = `governor:rps:${target}`;
-  const lockKey = `governor:lock:${target}`;
+  if (!isRedisReady()) return next(); // fail-safe
+
+  const ip = getIp(req);
+  const userId = req.user?._id || "guest";
+
+  // Hybrid identity (stronger than IP alone)
+  const target = `${userId}:${ip}`;
+
+  const rpsKey = `gov:rps:${target}`;
+  const lockKey = `gov:lock:${target}`;
 
   try {
-    // 1. Check if already locked
-    const isLocked = await redis.get(lockKey);
-    if (isLocked) {
+    // ===============================
+    // HARD LOCK CHECK
+    // ===============================
+    const locked = await redis.get(lockKey);
+    if (locked) {
       return res.status(429).json({
         success: false,
-        message: "Protocol Lock Active. System stabilization in progress. Please wait 5 minutes.",
-        type: "GOVERNOR_LOCK"
+        code: "GOVERNOR_LOCK",
+        message: "Too many requests. Try again later.",
+        retryAfter: LOCK_TIME
       });
     }
 
-    // 2. Increment RPS (1-second sliding window)
+    // ===============================
+    // RPS COUNT (WINDOWED)
+    // ===============================
     const count = await redis.incr(rpsKey);
-    if (count === 1) await redis.expire(rpsKey, 1);
+    if (count === 1) {
+      await redis.expire(rpsKey, WINDOW);
+    }
 
-    // 3. Threshold Violation Detection
-    // 20 req/s is the caution threshold, 50 req/s is the emergency lock threshold
-    if (count > 50) {
-      await redis.setex(lockKey, 300, "1"); // 5m lock
-      logger.error(`[GOVERNOR] Protocol Violation: IP ${target} exceeded 50 requests/sec. Activating 5m Protocol Lock.`);
+    // ===============================
+    // HARD LIMIT (BLOCK)
+    // ===============================
+    if (count > HARD_LIMIT) {
+      await redis.setex(lockKey, LOCK_TIME, "1");
+
+      logger.error("[GOVERNOR_LOCK_ACTIVATED]", {
+        target,
+        count
+      });
+
       return res.status(429).json({
         success: false,
-        message: "Emergency Protocol Lock Activated. Excessive request frequency detected.",
-        type: "EMERGENCY_LOCK"
+        code: "EMERGENCY_LOCK",
+        message: "Excessive traffic detected. Temporarily blocked.",
+        retryAfter: LOCK_TIME
       });
+    }
+
+    // ===============================
+    // SOFT LIMIT (THROTTLE)
+    // ===============================
+    if (count > SOFT_LIMIT) {
+      const delay = Math.min(count * 10, 200); // dynamic delay
+
+      logger.warn("[GOVERNOR_THROTTLE]", {
+        target,
+        count,
+        delay
+      });
+
+      // Add small delay instead of blocking
+      return setTimeout(next, delay);
     }
 
     next();
   } catch (err) {
-    // Fail-Safe: If Redis is down, don't block traffic
-    next();
+    logger.error("[GOVERNOR_ERROR]", err.message);
+    next(); // fail-safe
   }
 };
 
