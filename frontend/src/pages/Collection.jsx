@@ -1,343 +1,263 @@
-import { useState, useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
-import ProductCard from "../components/ProductCard";
-import { ProductCardSkeleton } from "../components/ui/Skeleton";
-import { ChevronDown, Check, X, Search, Sparkles } from "lucide-react";
+import { useState, useMemo } from "react";
+import { useSearchParams, useParams } from "react-router-dom";
+import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
+import {
+  ChevronDown,
+  SlidersHorizontal,
+  LayoutGrid,
+  LayoutList,
+  Plus,
+} from "lucide-react";
 import { api } from "../api/client";
+import { ENDPOINTS } from "../api/endpoints";
 import { mapProduct } from "../api/dynamicMapper";
+import FilterSidebar from "../components/FilterSidebar";
+import ProductGrid from "../components/ProductGrid";
 import { motion, AnimatePresence } from "framer-motion";
-import { staggerContainer, slideUp, modalTransition, springTransition, scaleIn } from "../utils/motion";
-import SEO from "../components/SEO";
-
-const CATEGORIES = ["All", "MEN", "WOMEN"];
-const TYPES = ["All", "TOPWEAR", "BOTTOMWEAR", "FULL_OUTFIT"];
-const SIZE_MAP = {
-  TOPWEAR: ["S", "M", "L", "XL", "XXL"],
-  BOTTOMWEAR: ["28", "30", "32", "34", "36", "38"],
-  All: ["S", "M", "L", "XL", "28", "30", "32", "34", "36"] // Mixed fallback
-};
-
-const TOP_SIZES = ["S", "M", "L", "XL", "XXL"];
-const BOTTOM_SIZES = ["28", "30", "32", "34", "36", "38"];
 
 const SORT_OPTIONS = [
-  { label: "Recommended", value: "recommended" },
+  { label: "Trending", value: "trending" },
   { label: "Newest", value: "newest" },
-  { label: "Price Low", value: "price-asc" },
-  { label: "Price High", value: "price-desc" },
+  { label: "Price: Low to High", value: "price-asc" },
+  { label: "Price: High to Low", value: "price-desc" },
 ];
 
 export default function Collection() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [viewMode, setViewMode] = useState("grid");
 
-  const category = searchParams.get("category") || "All";
-  const type = searchParams.get("type") || "All";
-  const sort = searchParams.get("sort") || "recommended";
-  const [meta, setMeta] = useState({ cursor: null, hasNextPage: false });
-  const [fetchingMore, setFetchingMore] = useState(false);
+  const { category: paramCategory } = useParams();
 
-  // Core loading effect
-  useEffect(() => {
-    const loadProducts = async () => {
-      setLoading(true);
-      try {
-        const query = new URLSearchParams(searchParams);
-        if (query.get("category") === "All") query.delete("category");
-        if (query.get("type") === "All") query.delete("type");
-        query.delete("page"); // Explicitly remove legacy page param
-        query.set("limit", "24");
+  /* ---------------- FILTERS ---------------- */
+  const filters = useMemo(() => {
+    const category =
+      paramCategory || searchParams.get("category") || "";
 
-        const res = await api.get(`/products?${query.toString()}`);
-        const data = res?.data || res || {};
-        const list = Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
-
-        setProducts(list.map(mapProduct));
-        setMeta({
-          cursor: data.pagination?.nextCursor || null,
-          hasNextPage: data.pagination?.hasNextPage || false
-        });
-      } catch (err) {
-        console.error("Collection Load Error:", err);
-        setProducts([]);
-      } finally {
-        setLoading(false);
-      }
+    return {
+      category: category.toLowerCase(),
+      color: searchParams.get("color") || "",
+      size: searchParams.get("size") || "",
+      q: searchParams.get("q") || "",
+      sort: searchParams.get("sort") || "trending",
     };
+  }, [searchParams, paramCategory]);
 
-    loadProducts();
-  }, [searchParams]);
+  /* ---------------- FILTER META ---------------- */
+  const { data: filterMeta } = useQuery({
+    queryKey: ["filters"],
+    queryFn: async () => {
+      const res = await api.get(ENDPOINTS.PRODUCTS.FILTERS);
+      return res?.data || res || {};
+    },
+    staleTime: 1000 * 60 * 60,
+  });
 
-  // Load more logic
-  const loadMore = async () => {
-    if (fetchingMore || !meta.hasNextPage || !meta.cursor) return;
-    setFetchingMore(true);
-    try {
+  /* ---------------- PRODUCTS ---------------- */
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+    isError,
+  } = useInfiniteQuery({
+    queryKey: ["products", filters],
+    queryFn: async ({ pageParam = 1 }) => {
       const query = new URLSearchParams(searchParams);
-      if (query.get("category") === "All") query.delete("category");
-      if (query.get("type") === "All") query.delete("type");
-      query.set("cursor", meta.cursor);
+      query.set("page", pageParam);
       query.set("limit", "24");
 
-      const res = await api.get(`/products?${query.toString()}`);
-      const data = res?.data || res || {};
-      const list = Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
+      if (filters.category) {
+        query.set("category", filters.category);
+      }
 
-      setProducts(prev => [...prev, ...list.map(mapProduct)]);
-      setMeta({
-        cursor: data.pagination?.nextCursor || null,
-        hasNextPage: data.pagination?.hasNextPage || false
-      });
-    } catch (err) {
-      console.error("Load More error:", err);
-    } finally {
-      setFetchingMore(false);
-    }
-  };
+      const res = await api.get(
+        `${ENDPOINTS.PRODUCTS.LIST}?${query.toString()}`
+      );
 
+      const raw = res?.data || res || {};
+
+      return {
+        products: (raw.data || []).map(mapProduct),
+        total: raw.total || 0,
+        nextPage: pageParam + 1,
+        hasMore: pageParam < (raw.pages || 1),
+      };
+    },
+    getNextPageParam: (last) =>
+      last.hasMore ? last.nextPage : undefined,
+  });
+
+  const products = useMemo(
+    () => data?.pages.flatMap((p) => p.products) || [],
+    [data]
+  );
+
+  const totalResults = data?.pages?.[0]?.total || 0;
+
+  /* ---------------- FILTER UPDATE ---------------- */
   const updateFilter = (key, value) => {
     const params = new URLSearchParams(searchParams);
-    if (value === "All") {
-      params.delete(key);
-    } else {
-      params.set(key, String(value));
-    }
+
+    if (!value) params.delete(key);
+    else params.set(key, value);
+
+    params.delete("page");
     setSearchParams(params);
   };
 
   const clearFilters = () => setSearchParams({});
 
-  // Dynamic SEO Title
-  const getSEOTitle = () => {
-    if (category === "All" && type === "All") return "Premium Collections";
-    const catPart = category !== "All" ? category : "";
-    const typePart = type !== "All" ? type : "Collection";
-    return `${catPart} ${typePart}`.trim();
-  };
-
-  // Helper for size filtering logic
-  const toggleSizeFilter = (key, size) => {
-    const current = searchParams.get(key)?.split(",") || [];
-    const isSelected = current.includes(size);
-    const updated = isSelected
-      ? current.filter(x => x !== size)
-      : [...current, size];
-    updateFilter(key, updated.length ? updated.join(",") : "All");
-  };
-
+  /* ---------------- UI ---------------- */
   return (
-    <div className="max-w-7xl mx-auto px-4 py-8">
-      <SEO 
-        title={getSEOTitle()} 
-        description={`Explore our exclusive ${getSEOTitle().toLowerCase()} at Doller Coach. Premium aesthetic apparel engineered for precision.`}
-      />
-      {/* HEADER */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 leading-tight">Collections</h1>
-        <p className="text-sm text-gray-500 mt-1">Discover our full range of premium apparel and accessories.</p>
+    <div className="bg-white min-h-screen">
+      {/* MOBILE FILTER BUTTON */}
+      <div className="lg:hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-[85%] max-w-sm">
+        <button
+          onClick={() => setMobileFiltersOpen(true)}
+          className="w-full bg-black text-white py-3 rounded-xl flex items-center justify-center gap-2 text-sm"
+        >
+          <SlidersHorizontal size={16} />
+          Filters
+        </button>
       </div>
 
-      {/* FILTER BAR */}
-      <div className="flex flex-wrap items-center justify-between gap-4 py-4 border-b border-gray-100">
-        <div className="flex flex-wrap items-center gap-2">
-          {CATEGORIES.map((c) => (
-            <button
-              key={c}
-              onClick={() => updateFilter("category", c)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${category === c
-                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-100"
-                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                }`}
-            >
-              {c}
+      <div className="max-w-7xl mx-auto px-4 py-6">
+        {/* HEADER */}
+        <div className="flex flex-col md:flex-row justify-between mb-6 gap-4">
+          <h1 className="text-2xl font-bold">
+            {filters.category || "All Products"}
+          </h1>
+
+          {/* SORT */}
+          <div className="relative group">
+            <button className="flex items-center gap-2 border px-4 py-2 rounded-lg text-sm">
+              {
+                SORT_OPTIONS.find(
+                  (o) => o.value === filters.sort
+                )?.label
+              }
+              <ChevronDown size={14} />
             </button>
-          ))}
-        </div>
 
-        <div className="relative group">
-          <motion.button
-            whileTap={{ scale: 0.95 }}
-            className="px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium hover:bg-gray-50 flex items-center gap-2 transition-colors">
-            Sort: {SORT_OPTIONS.find((o) => o.value === sort)?.label}
-            <ChevronDown size={14} className="group-hover:rotate-180 transition-transform duration-300" />
-          </motion.button>
-
-          <AnimatePresence>
-            <motion.div
-              initial={{ opacity: 0, y: 10, scale: 0.95 }}
-              whileInView={{ opacity: 1, y: 0, scale: 1 }}
-              className="absolute right-0 mt-2 w-48 bg-white border border-gray-100 rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 overflow-hidden"
-            >
+            <div className="absolute right-0 mt-2 w-48 bg-white border rounded-lg shadow hidden group-hover:block z-50">
               {SORT_OPTIONS.map((o) => (
                 <button
                   key={o.value}
                   onClick={() => updateFilter("sort", o.value)}
-                  className="w-full text-left px-4 py-2.5 text-sm hover:bg-indigo-50 flex items-center justify-between transition-colors"
+                  className="block w-full text-left px-4 py-2 text-sm hover:bg-gray-100"
                 >
                   {o.label}
-                  {sort === o.value && <Check size={14} className="text-indigo-600" />}
                 </button>
               ))}
-            </motion.div>
-          </AnimatePresence>
+            </div>
+          </div>
         </div>
-      </div>
 
-      <div className="flex gap-10 mt-8 h-[calc(100vh-320px)] min-h-[400px]">
-        {/* SIDEBAR */}
-        <aside className="w-56 hidden lg:block space-y-10 overflow-y-auto pr-6 no-scrollbar h-full">
-          <div className="space-y-4">
-            <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] leading-none mb-6">Categories</h3>
-            <div className="flex flex-col gap-3">
-              {CATEGORIES.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => updateFilter("category", c)}
-                  className={`text-left text-sm font-bold transition-all ${category === c ? "text-[#0f172a] translate-x-1" : "text-gray-400 hover:text-black"
-                    }`}
-                >
-                  {c}
+        <div className="flex gap-8">
+          {/* SIDEBAR */}
+          <aside className="hidden lg:block w-64">
+            <FilterSidebar
+              filters={filterMeta}
+              activeFilters={filters}
+              onUpdate={updateFilter}
+              onClear={clearFilters}
+            />
+          </aside>
+
+          {/* MAIN */}
+          <main className="flex-1">
+            {/* TOP BAR */}
+            <div className="flex justify-between items-center mb-4">
+              <p className="text-sm text-gray-500">
+                {products.length} of {totalResults} products
+              </p>
+
+              <div className="flex gap-2">
+                <button onClick={() => setViewMode("grid")}>
+                  <LayoutGrid size={20} />
                 </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-4 pt-6 border-t border-gray-100">
-            <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] leading-none mb-6">Product Type</h3>
-            <div className="flex flex-col gap-3">
-              {TYPES.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => updateFilter("type", t)}
-                  className={`text-left text-sm font-bold transition-all ${type === t ? "text-[#0f172a] translate-x-1" : "text-gray-400 hover:text-black"
-                    }`}
-                >
-                  {t}
+                <button onClick={() => setViewMode("list")}>
+                  <LayoutList size={20} />
                 </button>
-              ))}
-            </div>
-          </div>
-
-          {/* SIZES - DYNAMIC BASED ON TYPE */}
-          <div className="space-y-6 pt-6 border-t border-gray-100">
-            {type === "FULL_OUTFIT" ? (
-              <div className="space-y-8">
-                <div>
-                  <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] leading-none mb-4">Top Sizes</h3>
-                  <div className="grid grid-cols-3 gap-2">
-                    {TOP_SIZES.map((s) => {
-                      const isSelected = searchParams.get("topSizes")?.split(",").includes(s);
-                      return (
-                        <button
-                          key={s}
-                          onClick={() => toggleSizeFilter("topSizes", s)}
-                          className={`h-10 flex items-center justify-center rounded-lg border text-[10px] font-black transition-all ${isSelected
-                              ? "bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100"
-                              : "bg-white text-gray-400 border-gray-100 hover:border-gray-300"
-                            }`}
-                        >
-                          {s}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] leading-none mb-4">Bottom Sizes</h3>
-                  <div className="grid grid-cols-3 gap-2">
-                    {BOTTOM_SIZES.map((s) => {
-                      const isSelected = searchParams.get("bottomSizes")?.split(",").includes(s);
-                      return (
-                        <button
-                          key={s}
-                          onClick={() => toggleSizeFilter("bottomSizes", s)}
-                          className={`h-10 flex items-center justify-center rounded-lg border text-[10px] font-black transition-all ${isSelected
-                              ? "bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100"
-                              : "bg-white text-gray-400 border-gray-100 hover:border-gray-300"
-                            }`}
-                        >
-                          {s}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
               </div>
-            ) : (
-              <div>
-                <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] leading-none mb-6">Sizes</h3>
-                <div className="grid grid-cols-3 gap-2">
-                  {(SIZE_MAP[type] || SIZE_MAP.All).map((s) => {
-                    const isSelected = searchParams.get("sizes")?.split(",").includes(s);
-                    return (
-                      <button
-                        key={s}
-                        onClick={() => toggleSizeFilter("sizes", s)}
-                        className={`h-10 flex items-center justify-center rounded-lg border text-[10px] font-black transition-all ${isSelected
-                            ? "bg-[#0f172a] text-white border-[#0f172a]"
-                            : "bg-white text-gray-400 border-gray-100 hover:border-gray-300"
-                          }`}
-                      >
-                        {s}
-                      </button>
-                    );
-                  })}
-                </div>
+            </div>
+
+            {/* PRODUCTS */}
+            <ProductGrid
+              products={products}
+              viewMode={viewMode}
+              loading={isLoading}
+              error={isError}
+            />
+
+            {/* EMPTY STATE */}
+            {!isLoading && !products.length && (
+              <div className="text-center py-20">
+                <p className="text-gray-500 mb-4">
+                  No products found
+                </p>
+                <button
+                  onClick={clearFilters}
+                  className="text-black underline"
+                >
+                  Clear filters
+                </button>
               </div>
             )}
-          </div>
 
-          <div className="pt-6 border-t border-gray-100">
-            <button
-              onClick={clearFilters}
-              className="text-[10px] font-black text-gray-400 hover:text-red-500 transition-colors flex items-center gap-2 uppercase tracking-widest"
-            >
-              <X size={14} /> Clear Manifest
-            </button>
-          </div>
-        </aside>
-
-        <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar h-full">
-          <motion.div
-            variants={staggerContainer(0.08)}
-            initial="hidden"
-            animate="visible"
-            className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6"
-          >
-            {loading
-              ? [...Array(8)].map((_, i) => (
-                <motion.div key={`skel-${i}`} variants={slideUp}>
-                  <ProductCardSkeleton />
-                </motion.div>
-              ))
-              : Array.isArray(products) ? products.map((p) => (
-                <motion.div key={p?._id || p?.id} variants={slideUp}>
-                  <ProductCard product={p} />
-                </motion.div>
-              )) : null}
-          </motion.div>
-
-          {meta.hasNextPage && (
-            <div className="mt-16 flex justify-center pb-12">
-              <button
-                disabled={fetchingMore}
-                onClick={loadMore}
-                className="px-12 py-4 bg-[#0f172a] text-white rounded-xl text-xs font-black uppercase tracking-[0.3em] hover:scale-[1.03] active:scale-95 shadow-2xl transition-all disabled:opacity-50 flex items-center gap-3"
-              >
-                {fetchingMore ? (
-                  <span className="h-4 w-4 border-2 border-white/30 border-t-white animate-spin rounded-full" />
-                ) : (
-                  <Sparkles size={16} className="text-[#1e3a8a]" strokeWidth={3} />
-                )}
-                {fetchingMore ? "Synchronizing..." : "Explore more"}
-              </button>
-            </div>
-          )}
-          <div className="mt-12" />
+            {/* LOAD MORE */}
+            {hasNextPage && (
+              <div className="flex justify-center mt-10">
+                <button
+                  onClick={fetchNextPage}
+                  disabled={isFetchingNextPage}
+                  className="px-6 py-3 border rounded-lg flex items-center gap-2"
+                >
+                  {isFetchingNextPage
+                    ? "Loading..."
+                    : "Load More"}
+                  <Plus size={16} />
+                </button>
+              </div>
+            )}
+          </main>
         </div>
       </div>
+
+      {/* MOBILE FILTER DRAWER */}
+      <AnimatePresence>
+        {mobileFiltersOpen && (
+          <>
+            <motion.div
+              className="fixed inset-0 bg-black/50 z-40"
+              onClick={() => setMobileFiltersOpen(false)}
+            />
+
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              className="fixed bottom-0 w-full bg-white p-6 z-50 rounded-t-xl max-h-[80vh] overflow-auto"
+            >
+              <FilterSidebar
+                filters={filterMeta}
+                activeFilters={filters}
+                onUpdate={updateFilter}
+                onClear={clearFilters}
+              />
+
+              <button
+                onClick={() => setMobileFiltersOpen(false)}
+                className="w-full mt-4 bg-black text-white py-3 rounded-lg"
+              >
+                Apply Filters
+              </button>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

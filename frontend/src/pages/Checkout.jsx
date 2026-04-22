@@ -1,351 +1,283 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { useAuthStore, useCartStore } from "../store";
+import { useCartStore, useAuthStore } from "../store";
 import { api } from "../api/client";
-import { 
-  ArrowLeft, 
+import { ENDPOINTS } from "../api/endpoints";
+import {
+  ArrowLeft,
   Lock,
   ArrowRight,
   ShieldCheck,
   Truck,
-  AlertCircle
+  AlertCircle,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { formatPrice } from "../utils/format";
 import AddressManager from "../components/AddressManager";
 import OrderSummary from "../components/checkout/OrderSummary";
 import PaymentMethods from "../components/checkout/PaymentMethods";
 import CouponSection from "../components/checkout/CouponSection";
 import { useForm } from "../hooks/useForm";
 import { checkoutValidator } from "../utils/validation";
+import SafeText from "../components/common/SafeText";
 
 export default function Checkout() {
   const navigate = useNavigate();
   const location = useLocation();
   const buyNowProduct = location.state?.buyNowProduct;
-  
-  const { isAuthenticated, fetchUser } = useAuthStore();
-  const { items, getCartTotal, fetchCart } = useCartStore();
 
+  const { isAuthenticated } = useAuthStore();
+  const { cart = [], fetchCart } = useCartStore();
+
+  const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [couponCode, setCouponCode] = useState("");
-  const [hasAppliedCoupon, setHasAppliedCoupon] = useState(false);
-  const [discount, setDiscount] = useState(0);
-  const [isApplyingCoupon, setIsApplyingCoupon] = useState(false);
-  const [availableCoupons, setAvailableCoupons] = useState([]);
-  const [appliedCoupon, setAppliedCoupon] = useState(null);
 
-  const { values, errors, setValues, handleSubmit } = useForm(
+  const [couponCode, setCouponCode] = useState("");
+  const [discount, setDiscount] = useState(0);
+  const [appliedCoupon, setAppliedCoupon] = useState(null);
+  const [couponLoading, setCouponLoading] = useState(false);
+
+  const { values, setValues } = useForm(
     { selectedAddress: null, paymentMethod: "UPI" },
     checkoutValidator
   );
 
-  const checkoutItems = useMemo(() => buyNowProduct ? [buyNowProduct] : items, [buyNowProduct, items]);
+  const items = useMemo(
+    () => (buyNowProduct ? [buyNowProduct] : cart),
+    [buyNowProduct, cart]
+  );
 
+  /* ---------------- GUARDS ---------------- */
   useEffect(() => {
     if (!isAuthenticated) navigate("/login");
-    if (checkoutItems.length === 0) navigate("/cart");
-    
-    const fetchCoupons = async () => {
-      try {
-        const res = await api.get("/coupons");
-        const list = Array.isArray(res) ? res : res.data || [];
-        setAvailableCoupons(list);
-      } catch (err) {
-        console.error("Coupon Discovery Error:", err);
-      }
-    };
-    fetchCoupons();
-  }, [isAuthenticated, checkoutItems.length, navigate]);
+    if (!items.length) navigate("/cart");
+  }, [isAuthenticated, items.length]);
 
-  const subtotal = useMemo(() => 
-    buyNowProduct ? buyNowProduct.price * (buyNowProduct.quantity || 1) : items.reduce((sum, item) => sum + item.price * item.quantity, 0),
-  [buyNowProduct, items]);
+  /* ---------------- TOTALS ---------------- */
+  const subtotal = useMemo(() => {
+    return items.reduce(
+      (acc, i) => acc + (i.price || 0) * (i.quantity || 1),
+      0
+    );
+  }, [items]);
 
-  const delivery = 0; // FREE DELIVERY EVERYWHERE
-  const gst = Math.round(subtotal * 0.18);
-  const total = subtotal - discount + gst;
-  
-  const handleApplyCoupon = async (code) => {
-    const normalizedCode = (code || "").trim().toUpperCase();
-    if (!normalizedCode) return;
+  const gst = Math.round(subtotal * 0.05);
+  const delivery = subtotal > 499 ? 0 : 40;
+  const total = subtotal + gst + delivery - discount;
 
-    // Optional: Special 'SAVE50' logic as per request
-    if (normalizedCode === "SAVE50") {
-        setDiscount(50);
-        setAppliedCoupon({ code: "SAVE50", discountAmount: 50 });
-        setHasAppliedCoupon(true);
-        setCouponCode("SAVE50");
-        toast.success("Coupon SAVE50 Applied: ₹50 Off");
-        return;
-    }
+  /* ---------------- ADDRESS VALIDATION ---------------- */
+  const isAddressValid = useCallback((a) => {
+    if (!a) return false;
+    return (
+      a.name &&
+      a.phone?.length >= 10 &&
+      a.addressLine1 &&
+      a.city &&
+      a.state &&
+      a.pincode?.length === 6
+    );
+  }, []);
 
-    setIsApplyingCoupon(true);
+  /* ---------------- COUPON ---------------- */
+  const applyCoupon = async () => {
+    if (!couponCode.trim()) return;
+
+    setCouponLoading(true);
     try {
-      const res = await api.post("/coupons/apply", { 
-        code: normalizedCode, 
-        cartTotal: subtotal
+      const res = await api.post(ENDPOINTS.COUPONS.APPLY, {
+        code: couponCode,
+        cartTotal: subtotal,
       });
-      
-      if (res.success) {
-        const discValue = res.discount || 0;
-        setDiscount(discValue);
-        setAppliedCoupon({ code: res.couponCode, discountAmount: discValue });
-        setHasAppliedCoupon(true);
-        setCouponCode(res.couponCode);
-        toast.success(res.message);
+
+      if (res?.success) {
+        setDiscount(res.discount || 0);
+        setAppliedCoupon(res.couponCode);
+        toast.success("Coupon applied");
       } else {
-        toast.error(res.message || "Invalid coupon");
+        toast.error(res?.message || "Invalid coupon");
         setDiscount(0);
-        setHasAppliedCoupon(false);
       }
     } catch (err) {
-      toast.error(err.response?.data?.message || err.message || "Validation technical failure");
-      setDiscount(0);
-      setHasAppliedCoupon(false);
+      toast.error("Failed to apply coupon");
     } finally {
-      setIsApplyingCoupon(false);
+      setCouponLoading(false);
     }
   };
 
-  const handleRemoveCoupon = () => {
-    setHasAppliedCoupon(false);
+  const removeCoupon = () => {
     setDiscount(0);
     setCouponCode("");
     setAppliedCoupon(null);
-    toast.success("Coupon removed");
   };
 
-  const isAddressComplete = useCallback((addr) => {
-    if (!addr) return false;
-    const { name, phone, addressLine1, city, state, pincode } = addr;
-    return !!(name?.trim() && phone?.length >= 10 && addressLine1?.trim() && city?.trim() && state?.trim() && pincode?.length === 6);
-  }, []);
-
-  const initiateRazorpay = useCallback(async (oid, payData) => {
-    return new Promise((resolve, reject) => {
-      if (!window.Razorpay) {
-        toast.error("Razorpay script not found");
-        return reject("No RZP");
-      }
-
-      const options = {
-        key: payData.keyId,
-        amount: payData.order.amount,
-        currency: "INR",
-        name: "DOLLER Coach",
-        description: "Order Payment",
-        order__id: payData.order.id,
-        theme: { color: "#0f172a" },
-        handler: async (response) => {
-          try {
-            const verify = await api.post("/payment/verify", {
-              razorpayOrderId: response.razorpay_order_id,
-              razorpayPaymentId: response.razorpay_payment_id,
-              razorpaySignature: response.razorpay_signature,
-              orderId: oid,
-            });
-            if (verify.verified) {
-              toast.success("Payment verified");
-              resolve(true);
-            } else {
-              toast.error("Verification failed");
-              resolve(false);
-            }
-          } catch (err) {
-            toast.error("Payment verification error");
-            reject(err);
-          }
-        },
-        modal: { ondismiss: () => setLoading(false) }
-      };
-
-      const rzp = new window.Razorpay(options);
-      rzp.on("payment.failed", (res) => {
-        toast.error(res.error.description || "Payment failed");
-        setLoading(false);
-      });
-      rzp.open();
-    });
-  }, []);
-
-  const processOrder = async (formValues) => {
-    const { selectedAddress, paymentMethod } = formValues;
-    if (!isAddressComplete(selectedAddress)) {
-      return toast.error("Please complete your shipping address details.");
+  /* ---------------- ORDER ---------------- */
+  const placeOrder = async () => {
+    if (!isAddressValid(values.selectedAddress)) {
+      return toast.error("Please complete your address.");
     }
 
     setLoading(true);
+
     try {
       const payload = {
-        products: checkoutItems.map(item => ({
-          productId: item.id || item._id,
-          title: item.title,
-          quantity: item.quantity || 1,
-          price: item.price,
-          size: item.size || "",
-          topSize: item.topSize || "",
-          bottomSize: item.bottomSize || "",
-          image: item.image || ""
+        products: items.map((i) => ({
+          productId: i.id || i._id,
+          quantity: i.quantity || 1,
+          price: i.price,
         })),
         subtotal,
-        discount,
         gst,
         delivery,
+        discount,
         total,
-        address: {
-          name: selectedAddress.name,
-          phone: selectedAddress.phone,
-          address: selectedAddress.addressLine1,
-          city: selectedAddress.city,
-          state: selectedAddress.state,
-          pincode: selectedAddress.pincode
-        },
-        paymentMethod: paymentMethod.toUpperCase(),
-        couponCode: hasAppliedCoupon ? couponCode : null,
+        address: values.selectedAddress,
+        paymentMethod: values.paymentMethod,
       };
 
-      const orderRes = await api.post("/orders", payload);
-      const orderId = orderRes._id || orderRes.id;
+      const order = await api.post(ENDPOINTS.ORDERS.BASE, payload);
+      const orderId = order.id || order._id;
 
-      if (paymentMethod === "COD") {
-        toast.success("Order Placed Successfully");
+      if (values.paymentMethod === "COD") {
+        toast.success("Order placed successfully");
         await fetchCart();
         navigate(`/order-success/${orderId}`);
         return;
       }
 
-      // Online Payment Init
-      const payRes = await api.post("/payment/create-order", { orderId });
-      const success = await initiateRazorpay(orderId, payRes);
-      
-      if (success) {
-        await fetchCart();
-        navigate(`/order-success/${orderId}`);
-      }
+      // Razorpay
+      const pay = await api.post(
+        ENDPOINTS.PAYMENTS.CREATE_ORDER,
+        { orderId }
+      );
+
+      const rzp = new window.Razorpay({
+        key: pay.keyId,
+        order_id: pay.order.id,
+        amount: pay.order.amount,
+        handler: async (res) => {
+          await api.post(ENDPOINTS.PAYMENTS.VERIFY, {
+            ...res,
+            orderId,
+          });
+          toast.success("Payment successful");
+          navigate(`/order-success/${orderId}`);
+        },
+      });
+
+      rzp.open();
     } catch (err) {
-      console.error("Checkout Error:", err.response?.data || err.message);
-      toast.error(err.response?.data?.message || "Checkout failed");
+      toast.error("Order failed. Try again.");
     } finally {
       setLoading(false);
     }
   };
 
+  /* ---------------- UI ---------------- */
   return (
-    <div className="bg-slate-50 min-h-screen pb-20">
-      {/* HEADER SECTION */}
-      <div className="border-b border-gray-100 bg-white sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-4 h-20 flex items-center justify-between">
-          <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-gray-400 hover:text-black transition-all group">
-            <div className="h-10 w-10 rounded-full bg-gray-50 flex items-center justify-center group-hover:bg-gray-100 transition-colors">
-              <ArrowLeft size={18} />
-            </div>
-            <span className="text-[10px] font-black uppercase tracking-widest">Abort Process</span>
+    <div className="bg-gray-50 min-h-screen pb-20">
+      {/* HEADER */}
+      <div className="bg-white border-b sticky top-0 z-50">
+        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+          <button
+            onClick={() =>
+              step > 1 ? setStep(step - 1) : navigate(-1)
+            }
+            className="flex items-center gap-2 text-sm text-gray-500"
+          >
+            <ArrowLeft size={16} />
+            Back
           </button>
-          
-          <div className="flex flex-col items-center">
-             <h1 className="text-xl font-black text-gray-900 uppercase tracking-tighter leading-none">Safe Checkout</h1>
-             <p className="text-[9px] font-black text-gray-400 uppercase tracking-[0.2em] mt-1">Encrypted Transaction Node</p>
-          </div>
 
-          <div className="flex items-center gap-2 text-green-600 bg-green-50 px-3 py-1.5 rounded-full border border-green-100">
-            <Lock size={12} strokeWidth={3} />
-            <span className="text-[9px] font-black uppercase tracking-widest">Protocol Secure</span>
+          <h1 className="font-semibold">Checkout</h1>
+
+          <div className="flex items-center text-green-600 text-xs gap-1">
+            <Lock size={14} /> Secure
           </div>
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto px-4 py-12">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
-          
-          {/* LEFT COLUMN: LOGISTICS & PAYMENT */}
-          <div className="lg:col-span-7 space-y-8">
-            
-            {/* 1. SHIPPING ADDRESS */}
-            <div className="bg-white border border-gray-100 rounded-[2.5rem] p-8 lg:p-10 space-y-8 shadow-sm">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <span className="flex items-center justify-center w-10 h-10 rounded-2xl bg-[#0f172a] text-white text-xs font-black shadow-lg">01</span>
-                    <div className="flex flex-col">
-                      <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tighter">Shipping Destination</h2>
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Select your delivery vertex</p>
-                    </div>
-                  </div>
-                </div>
-
-                <AddressManager 
-                  onSelect={(addr) => setValues({ ...values, selectedAddress: addr })} 
-                  selectedId={values.selectedAddress?._id || values.selectedAddress?.id} 
-                />
-            </div>
-
-            {/* 2. PAYMENT METHOD */}
-            <PaymentMethods 
-              selected={values.paymentMethod} 
-              onSelect={(m) => setValues({ ...values, paymentMethod: m })} 
+      <div className="max-w-6xl mx-auto px-4 py-8 grid lg:grid-cols-12 gap-10">
+        {/* LEFT */}
+        <div className="lg:col-span-7 space-y-6">
+          {step === 1 && (
+            <AddressManager
+              onSelect={(a) =>
+                setValues({ ...values, selectedAddress: a })
+              }
             />
-          </div>
+          )}
 
-          {/* RIGHT COLUMN: MANIFEST & SUMMARY */}
-          <div className="lg:col-span-5 space-y-6 lg:sticky lg:top-28">
-            
-            <CouponSection 
-              code={couponCode}
-              setCode={setCouponCode}
-              onApply={handleApplyCoupon}
-              onRemove={handleRemoveCoupon}
-              isApplied={hasAppliedCoupon}
-              isLoading={isApplyingCoupon}
-              subtotal={subtotal}
-              availableCoupons={availableCoupons}
+          {step === 2 && (
+            <PaymentMethods
+              selected={values.paymentMethod}
+              onSelect={(m) =>
+                setValues({ ...values, paymentMethod: m })
+              }
             />
+          )}
 
-            <OrderSummary 
-              items={checkoutItems}
-              subtotal={subtotal}
-              discountAmount={discount}
-              gstAmount={gst}
-              deliveryFee={delivery}
-              total={total}
-            />
+          {step === 3 && (
+            <div className="bg-white p-6 rounded-xl border space-y-4">
+              <h2 className="font-semibold">Review</h2>
 
-            <button 
-              onClick={(e) => handleSubmit(e, processOrder)}
-              disabled={loading}
-              className={`w-full py-6 rounded-2xl text-[11px] font-black uppercase tracking-[0.25em] transition-all shadow-2xl flex items-center justify-center gap-3 group relative overflow-hidden ${
-                isAddressComplete(values.selectedAddress)
-                ? "bg-[#0f172a] text-white hover:bg-black active:scale-[0.98]" 
-                : "bg-gray-100 text-gray-300 cursor-not-allowed opacity-70"
-              }`}
-            >
-              {loading ? (
-                <div className="h-5 w-5 border-3 border-white/20 border-t-white rounded-full animate-spin" />
-              ) : (
-                <>
-                  <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity" />
-                  {isAddressComplete(values.selectedAddress) ? "Authorize & Place Order" : "Address Data Incomplete"} 
-                  <ArrowRight size={18} className={`${isAddressComplete(values.selectedAddress) ? "group-hover:translate-x-2 transition-transform" : "opacity-0"}`} strokeWidth={3} />
-                </>
-              )}
-            </button>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col items-center justify-center p-4 bg-white border border-gray-100 rounded-2xl shadow-sm">
-                <ShieldCheck size={18} className="text-gray-400 mb-2" />
-                <span className="text-[9px] text-gray-400 font-black uppercase tracking-widest text-center">Secure Vault<br/>Payment</span>
+              <div>
+                <p className="text-sm text-gray-500">Address</p>
+                <SafeText>{values.selectedAddress?.name}</SafeText>
               </div>
-              <div className="flex flex-col items-center justify-center p-4 bg-white border border-gray-100 rounded-2xl shadow-sm">
-                <Truck size={18} className="text-gray-400 mb-2" />
-                <span className="text-[9px] text-gray-400 font-black uppercase tracking-widest text-center">Expedited<br/>Logistics</span>
+
+              <div>
+                <p className="text-sm text-gray-500">Payment</p>
+                <p>{values.paymentMethod}</p>
               </div>
             </div>
+          )}
 
-            {!isAddressComplete(values.selectedAddress) && values.selectedAddress && (
-              <div className="flex items-center gap-3 p-4 bg-red-50 rounded-2xl border border-red-100 animate-pulse">
-                <AlertCircle size={16} className="text-red-500 flex-shrink-0" />
-                <p className="text-[10px] text-red-600 font-black uppercase tracking-widest leading-relaxed">Required fields missing in selected address manifest. Please update destination details.</p>
-              </div>
-            )}
+          {/* ACTION */}
+          <button
+            onClick={() =>
+              step < 3 ? setStep(step + 1) : placeOrder()
+            }
+            disabled={loading}
+            className="w-full h-12 bg-black text-white rounded-lg"
+          >
+            {loading
+              ? "Processing..."
+              : step < 3
+                ? "Continue"
+                : "Place Order"}
+          </button>
+        </div>
+
+        {/* RIGHT */}
+        <div className="lg:col-span-5 space-y-4">
+          <CouponSection
+            code={couponCode}
+            setCode={setCouponCode}
+            onApply={applyCoupon}
+            onRemove={removeCoupon}
+            isApplied={!!appliedCoupon}
+            isLoading={couponLoading}
+            subtotal={subtotal}
+          />
+
+          <OrderSummary
+            items={items}
+            subtotal={subtotal}
+            gstAmount={gst}
+            deliveryFee={delivery}
+            discountAmount={discount}
+            total={total}
+          />
+
+          {!isAddressValid(values.selectedAddress) && (
+            <div className="flex gap-2 text-red-600 text-sm">
+              <AlertCircle size={16} />
+              Please complete your address
+            </div>
+          )}
+
+          <div className="flex gap-3 text-xs text-gray-500">
+            <ShieldCheck size={14} /> Secure payment
+            <Truck size={14} /> Fast delivery
           </div>
         </div>
       </div>

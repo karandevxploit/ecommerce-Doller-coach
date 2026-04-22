@@ -2,108 +2,214 @@ import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import toast from "react-hot-toast";
-import { Sparkles, ArrowRight, Lock, Key, Mail } from "lucide-react";
+import {
+  ArrowRight,
+  Lock,
+  Key,
+  Mail,
+  Eye,
+  EyeOff,
+} from "lucide-react";
 
 export default function ResetPassword() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const [email, setEmail] = useState(params.get("email") || "");
-  const [token, setToken] = useState(params.get("token") || "");
-  const [newPassword, setNewPassword] = useState("");
-  const [loading, setLoading] = useState(false);
 
+  const [email] = useState(params.get("email") || "");
+  const [token, setToken] = useState(params.get("token") || "");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] =
+    useState("");
+
+  const [showPass, setShowPass] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  /* ---------------- VALIDATION ---------------- */
+  const validate = () => {
+    if (!email) return "Missing email information.";
+    if (!token.trim()) return "Please enter the verification code.";
+    if (token.length < 4) return "Invalid verification code.";
+    if (!password) return "Please enter a new password.";
+    if (password.length < 6)
+      return "Password must be at least 6 characters.";
+    if (password !== confirmPassword)
+      return "Passwords do not match.";
+    return "";
+  };
+
+  /* ---------------- SUBMIT ---------------- */
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!email || !token || !newPassword) return toast.error("Complete the security logic");
-    if (newPassword.length < 6) return toast.error("New password must be at least 6 characters");
+    setError("");
+
+    const validationError = validate();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
     setLoading(true);
+
     try {
       await api.post("/auth/reset-password", {
         email,
         resetToken: token,
-        newPassword,
+        newPassword: password,
       });
-      toast.success("Security System Updated");
+
+      toast.success("Password updated successfully");
       navigate("/login");
     } catch (err) {
-      toast.error(err?.response?.data?.message || "Reset sequence failed");
+      const msg =
+        err?.response?.data?.message ||
+        "Failed to reset password. Please try again.";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
   };
 
+  /* ---------------- UI ---------------- */
   return (
-    <div className="min-h-screen grid place-items-center py-8 bg-white px-4">
-      <div className="w-full max-w-sm">
-        <div className="bg-[#f1f5f9] border border-gray-100 rounded-xl p-8 shadow-sm">
-          <div className="text-center mb-8">
-            <div className="px-4 py-2 text-sm rounded-lg bg-[#0f172a] text-white hover:scale-[1.02] shadow-sm transition-all">
-              <Sparkles size={12} className="text-[#1e3a8a]" strokeWidth={3} /> Doller Coach
-            </div>
-            <h2 className="text-lg font-black text-[#0f172a] tracking-tighter uppercase leading-none">Save logic</h2>
-            <p className="text-[9px] text-gray-400 font-black mt-2 uppercase tracking-widest">Define new security entry</p>
-          </div>
+    <div className="min-h-screen flex items-center justify-center px-4 bg-gray-50">
+      <div className="w-full max-w-md bg-white rounded-2xl p-8 shadow-sm border">
+        {/* Header */}
+        <div className="text-center mb-6">
+          <h1 className="text-xl font-semibold">
+            Reset Password
+          </h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Enter your verification code and new password
+          </p>
+        </div>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Iduser Account</label>
-              <div className="relative">
-                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={18} />
-                <input
-                  type="email"
-                  placeholder="name@example.com"
-                  value={email}
-                  disabled
-                  className="w-full pl-12 pr-4 py-4 rounded-xl bg-[#f1f5f9] border border-gray-200 text-gray-400 text-sm font-medium focus:outline-none transition-all shadow-inner cursor-not-allowed"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Token</label>
-              <div className="relative">
-                <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
-                <input
-                  type="text"
-                  placeholder="SECURITY_TOKEN"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3 rounded-lg bg-white border border-transparent text-[#0f172a] font-black uppercase tracking-widest text-xs focus:border-[#1e3a8a] outline-none transition-all shadow-sm"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">New Key</label>
-              <div className="relative">
-                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3 rounded-lg bg-white border border-transparent text-[#0f172a] font-black uppercase tracking-widest text-xs focus:border-[#1e3a8a] outline-none transition-all shadow-sm"
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-5 bg-[#1e3a8a] text-[#0f172a] rounded-full text-[13px] font-black uppercase tracking-widest shadow-sm hover:shadow-sm hover:-translate-y-1 active:scale-95 disabled:opacity-50 transition-all flex items-center justify-center gap-3"
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Error */}
+          {error && (
+            <div
+              className="bg-red-50 border border-red-200 text-red-600 px-4 py-2 rounded-md text-sm"
+              role="alert"
             >
-              {loading ? "Saveing..." : "Update System"} <ArrowRight size={18} strokeWidth={3} />
-            </button>
-          </form>
+              {error}
+            </div>
+          )}
 
-          <div className="mt-8 text-center border-t border-gray-100 pt-6">
-            <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest leading-relaxed mb-4">
-               Iduser will be updated across all endpoints.
-            </p>
-            <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">
-              Abort recovery? <Link to="/login" className="text-[#0f172a] font-black hover:text-[#1e3a8a] transition-colors underline underline-offset-4">Login</Link>
-            </p>
+          {/* Email */}
+          <div>
+            <label className="text-sm text-gray-600">
+              Email
+            </label>
+            <div className="relative mt-1">
+              <Mail
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                size={18}
+              />
+              <input
+                type="email"
+                value={email}
+                disabled
+                className="w-full h-12 pl-10 pr-3 border rounded-lg bg-gray-100 text-gray-500"
+              />
+            </div>
           </div>
+
+          {/* Token */}
+          <div>
+            <label className="text-sm text-gray-600">
+              Verification Code
+            </label>
+            <div className="relative mt-1">
+              <Key
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                size={18}
+              />
+              <input
+                type="text"
+                value={token}
+                onChange={(e) =>
+                  setToken(e.target.value.trim())
+                }
+                placeholder="Enter code"
+                aria-label="Verification code"
+                className="w-full h-12 pl-10 pr-3 border rounded-lg focus:ring-2 focus:ring-black outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Password */}
+          <div>
+            <label className="text-sm text-gray-600">
+              New Password
+            </label>
+            <div className="relative mt-1">
+              <Lock
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                size={18}
+              />
+              <input
+                type={showPass ? "text" : "password"}
+                value={password}
+                onChange={(e) =>
+                  setPassword(e.target.value)
+                }
+                placeholder="Enter new password"
+                className="w-full h-12 pl-10 pr-10 border rounded-lg focus:ring-2 focus:ring-black outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPass((p) => !p)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500"
+              >
+                {showPass ? (
+                  <EyeOff size={18} />
+                ) : (
+                  <Eye size={18} />
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Confirm Password */}
+          <div>
+            <label className="text-sm text-gray-600">
+              Confirm Password
+            </label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) =>
+                setConfirmPassword(e.target.value)
+              }
+              placeholder="Re-enter password"
+              className="w-full h-12 border rounded-lg px-3 focus:ring-2 focus:ring-black outline-none"
+            />
+          </div>
+
+          {/* Submit */}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full h-12 bg-black text-white rounded-lg flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            {loading
+              ? "Updating password..."
+              : "Update Password"}
+            {!loading && <ArrowRight size={16} />}
+          </button>
+        </form>
+
+        {/* Footer */}
+        <div className="mt-6 text-center text-sm text-gray-500">
+          Remember your password?{" "}
+          <Link
+            to="/login"
+            className="text-black font-medium hover:underline"
+          >
+            Login
+          </Link>
         </div>
       </div>
     </div>

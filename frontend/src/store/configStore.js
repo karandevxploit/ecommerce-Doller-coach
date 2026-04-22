@@ -4,43 +4,99 @@ import { api } from "../api/client";
 export const useConfigStore = create((set, get) => ({
   config: null,
   loading: false,
+  error: null,
+  lastFetched: null,
 
-  fetchConfig: async () => {
-    if (get().loading || get().config) return;
-    set({ loading: true });
+  /* ---------------- FETCH CONFIG ---------------- */
+  fetchConfig: async (force = false) => {
+    const { loading, config, lastFetched } = get();
+
+    // Prevent duplicate calls + simple cache (5 min)
+    const isFresh =
+      lastFetched &&
+      Date.now() - lastFetched < 5 * 60 * 1000;
+
+    if (!force && (loading || (config && isFresh))) return;
+
+    set({ loading: true, error: null });
+
     try {
-      const data = await api.get("/config");
-      set({ config: data });
+      const res = await api.get("/config");
+
+      const data =
+        res?.data ||
+        res ||
+        null;
+
+      if (!data) {
+        throw new Error("Invalid config response");
+      }
+
+      set({
+        config: data,
+        loading: false,
+        lastFetched: Date.now(),
+      });
     } catch (err) {
-      console.error("Failed to fetch brand config", err);
-    } finally {
-      set({ loading: false });
+      console.error("Config fetch failed:", err);
+
+      set({
+        error:
+          err?.response?.data?.message ||
+          err?.message ||
+          "Failed to load configuration",
+        loading: false,
+      });
     }
   },
 
+  /* ---------------- UPDATE CONFIG ---------------- */
   updateConfig: async (payload) => {
+    set({ loading: true, error: null });
+
     try {
-      const data = await api.put("/admin/config", payload);
-      set({ config: data });
+      const res = await api.put("/admin/config", payload);
+
+      const data =
+        res?.data ||
+        res ||
+        null;
+
+      if (!data) {
+        throw new Error("Invalid update response");
+      }
+
+      set({
+        config: data,
+        loading: false,
+        lastFetched: Date.now(),
+      });
+
       return data;
     } catch (err) {
-      console.error("Failed to update config", err);
-      throw err;
+      console.error("Config update failed:", err);
+
+      const message =
+        err?.response?.data?.message ||
+        err?.message ||
+        "Failed to update configuration";
+
+      set({
+        error: message,
+        loading: false,
+      });
+
+      throw new Error(message);
     }
   },
 
-  uploadLogo: async (file) => {
-    const formData = new FormData();
-    formData.append("logo", file);
-    try {
-      const data = await api.post("/admin/logo", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-      set((state) => ({ config: { ...state.config, logo: data.logo } }));
-      return data.logo;
-    } catch (err) {
-      console.error("Failed to upload logo", err);
-      throw err;
-    }
+  /* ---------------- RESET ---------------- */
+  resetConfig: () => {
+    set({
+      config: null,
+      error: null,
+      loading: false,
+      lastFetched: null,
+    });
   },
 }));

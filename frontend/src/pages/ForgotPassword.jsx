@@ -2,51 +2,116 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import toast from "react-hot-toast";
-import { Sparkles, ArrowRight, Mail, Key } from "lucide-react";
+import { Sparkles, ArrowRight, Mail } from "lucide-react";
+import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 
 export default function ForgotPassword() {
   const navigate = useNavigate();
+  const { executeRecaptcha } = useGoogleReCaptcha();
+
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const validate = () => {
+    if (!email.trim()) return "Please enter your email address.";
+    if (!/\S+@\S+\.\S+/.test(email))
+      return "Please enter a valid email address.";
+    return "";
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!email) return toast.error("Enter registered email");
+    setError("");
+
+    const validationError = validate();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    if (!executeRecaptcha) {
+      toast.error("Verification failed. Please refresh and try again.");
+      return;
+    }
+
     setLoading(true);
+
     try {
-      await api.post("/auth/send-otp", { email });
-      toast.success("Security Update Sent");
-      navigate(`/verify-reset-otp?email=${encodeURIComponent(email)}`);
+      const token = await executeRecaptcha("forgot_password");
+
+      await api.post("/auth/send-otp", {
+        email,
+        recaptchaToken: token,
+      });
+
+      toast.success("OTP sent to your email");
+      navigate(
+        `/verify-reset-otp?email=${encodeURIComponent(email)}`
+      );
     } catch (err) {
-      toast.error(err?.response?.data?.message || "Failed to emit update");
+      const msg =
+        err?.response?.data?.message ||
+        err?.message ||
+        "Failed to send OTP. Please try again.";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen grid place-items-center py-8 bg-white px-4">
-      <div className="w-full max-w-sm">
-        <div className="bg-[#f1f5f9] border border-gray-100 rounded-xl p-8 shadow-sm">
-          <div className="text-center mb-8">
-            <div className="px-4 py-2 text-sm rounded-lg bg-[#0f172a] text-white hover:scale-[1.02] shadow-sm transition-all">
-              <Sparkles size={12} className="text-[#1e3a8a]" strokeWidth={3} /> Doller Coach
+    <div className="min-h-screen grid place-items-center px-4 bg-gray-50">
+      <div className="w-full max-w-md">
+        <div className="bg-white border rounded-2xl p-8 shadow-sm">
+          {/* Header */}
+          <div className="text-center mb-6">
+            <div className="inline-flex items-center gap-2 px-3 py-1 bg-black text-white text-xs rounded-md mb-4">
+              <Sparkles size={12} />
+              Your Store
             </div>
-            <h2 className="text-lg font-black text-[#0f172a] tracking-tighter uppercase leading-none">Recovery</h2>
-            <p className="text-[9px] text-gray-400 font-black mt-2 uppercase tracking-widest">Secure reset update</p>
+
+            <h2 className="text-xl font-semibold text-gray-900">
+              Forgot Password
+            </h2>
+
+            <p className="text-sm text-gray-500 mt-1">
+              Enter your email to receive a verification code
+            </p>
           </div>
 
+          {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-1">
-              <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">Iduser Update</label>
-              <div className="relative">
-                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
+            {error && (
+              <div
+                className="bg-red-50 border border-red-200 text-red-600 px-4 py-2 rounded-md text-sm"
+                role="alert"
+              >
+                {error}
+              </div>
+            )}
+
+            <div>
+              <label className="text-sm text-gray-600">
+                Email Address
+              </label>
+
+              <div className="relative mt-1">
+                <Mail
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                  size={18}
+                />
+
                 <input
                   type="email"
-                  placeholder="USER@NEXUS"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3 rounded-lg bg-white border border-transparent text-[#0f172a] font-black uppercase tracking-widest text-xs focus:border-[#1e3a8a] outline-none transition-all shadow-sm"
+                  onChange={(e) =>
+                    setEmail(e.target.value.toLowerCase())
+                  }
+                  placeholder="you@example.com"
+                  aria-label="Email address"
+                  className="w-full h-12 pl-10 pr-3 border rounded-lg focus:ring-2 focus:ring-black outline-none text-sm"
                 />
               </div>
             </div>
@@ -54,24 +119,22 @@ export default function ForgotPassword() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-4 bg-[#1e3a8a] text-[#0f172a] rounded-lg text-[11px] font-black uppercase tracking-widest shadow-sm hover:shadow-sm hover:-translate-y-1 active:scale-95 disabled:opacity-50 transition-all flex items-center justify-center gap-3"
+              className="w-full h-12 bg-black text-white rounded-lg text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-60"
             >
-              {loading ? "Emitting Update..." : "Send OTP"} <ArrowRight size={18} strokeWidth={3} />
+              {loading ? "Sending OTP..." : "Send OTP"}
+              {!loading && <ArrowRight size={16} />}
             </button>
           </form>
 
-          <div className="mt-8 text-center border-t border-gray-100 pt-6">
-            <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest leading-relaxed mb-4">
-               A secure 6-digit sequence will be sent to your nexus.
-            </p>
-            <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">
-              Recall iduser? <Link to="/login" className="text-[#0f172a] font-black hover:text-[#1e3a8a] transition-colors underline underline-offset-4">Login</Link>
-            </p>
-          </div>
-          
-          <div className="mt-6 flex justify-center gap-3">
-             <Key size={14} className="text-[#1e3a8a]" />
-             <Mail size={14} className="text-[#1e3a8a]" />
+          {/* Footer */}
+          <div className="mt-6 text-center text-sm text-gray-500">
+            Remember your password?{" "}
+            <Link
+              to="/login"
+              className="text-black font-medium hover:underline"
+            >
+              Login
+            </Link>
           </div>
         </div>
       </div>

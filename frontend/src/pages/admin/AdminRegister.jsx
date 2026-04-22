@@ -2,18 +2,34 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { api } from "../../api/client";
-import { ShieldCheck, User as UserIcon, Mail, Lock, Key, ArrowRight, ArrowLeft, Eye, EyeOff, CheckCircle2, AlertCircle } from "lucide-react";
+import {
+  ShieldCheck,
+  User as UserIcon,
+  Mail,
+  Lock,
+  Key,
+  ArrowRight,
+  ArrowLeft,
+  Eye,
+  EyeOff,
+  CheckCircle2,
+  AlertCircle,
+} from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 export default function AdminRegister() {
   const navigate = useNavigate();
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [secret, setSecret] = useState("");
+
+  const [form, setForm] = useState({
+    name: "",
+    email: "",
+    password: "",
+    secret: "",
+  });
+
   const [showPassword, setShowPassword] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
-  
+
   const [adminExists, setAdminExists] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -21,73 +37,73 @@ export default function AdminRegister() {
 
   useEffect(() => {
     let mounted = true;
+
     (async () => {
       try {
         const res = await api.get("/auth/admin-exists");
         if (mounted) setAdminExists(Boolean(res?.exists));
-      } catch (err) {
-        // ignore
+      } catch {
+        // silent
       }
     })();
+
     return () => {
       mounted = false;
     };
   }, []);
 
-  const formatError = (err) => {
-    const raw = String(err).toLowerCase();
-    if (raw.includes("email")) return "Invalid email or account already exists";
-    if (raw.includes("password")) return "Password must be at least 6 characters";
-    if (raw.includes("secret")) return "Invalid admin secret key";
-    if (raw.includes("validation failed")) return "Something went wrong while creating your account. Please try again.";
-    return "Something went wrong. Please try again.";
+  const handleChange = (field, value) => {
+    setForm((prev) => ({ ...prev, [field]: value }));
   };
 
-  const validateEmail = (email) => {
-    return /\S+@\S+\.\S+/.test(email);
+  const validate = () => {
+    if (!form.name.trim()) return "Please enter your full name.";
+    if (!form.email.trim()) return "Please enter your email.";
+    if (!/\S+@\S+\.\S+/.test(form.email))
+      return "Please enter a valid email address.";
+    if (!form.password) return "Please create a password.";
+    if (form.password.length < 6)
+      return "Password must be at least 6 characters.";
+    if (!form.secret.trim()) return "Admin secret key is required.";
+    return "";
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
-    
+
     if (adminExists) {
-      setError("An admin account already exists. Only one root admin is allowed.");
+      setError("Admin account already exists. Please login.");
       return;
     }
 
-    if (!name || !email || !password || !secret) {
-      setError("All fields are required to create an account.");
-      return;
-    }
-
-    if (!validateEmail(email)) {
-      setError("Please enter a valid email address.");
+    const validationError = validate();
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
     setLoading(true);
+
     try {
-      await api.post("/auth/admin-register", { 
-        name, 
-        email, 
-        password, 
-        secret, 
-        provider: "email" 
+      await api.post("/auth/admin-register", {
+        ...form,
+        provider: "email",
       });
-      
+
       setSuccess(true);
-      toast.success("Admin account created successfully 🎉");
-      
+      toast.success("Account created successfully");
+
       setTimeout(() => {
         navigate("/admin/login", { replace: true });
       }, 2000);
-      
     } catch (err) {
-      const msg = err?.response?.data?.message || "Registration failed";
-      const friendlyMsg = formatError(msg);
-      setError(friendlyMsg);
-      toast.error(friendlyMsg);
+      const msg =
+        err?.response?.data?.message ||
+        err?.message ||
+        "Failed to create account. Please try again.";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -96,154 +112,176 @@ export default function AdminRegister() {
   if (success) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#f8fafc] p-6">
-        <motion.div 
-          initial={{ scale: 0.9, opacity: 0 }}
+        <motion.div
+          initial={{ scale: 0.95, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
-          className="w-full max-w-md bg-white rounded-3xl p-10 shadow-2xl text-center space-y-6"
+          className="w-full max-w-md bg-white rounded-3xl p-10 shadow-xl text-center space-y-6"
         >
           <div className="flex justify-center">
-            <div className="h-20 w-20 bg-green-50 text-green-500 rounded-full flex items-center justify-center shadow-inner">
-              <CheckCircle2 size={48} />
+            <div className="h-20 w-20 bg-green-50 text-green-600 rounded-full flex items-center justify-center">
+              <CheckCircle2 size={44} />
             </div>
           </div>
-          <div className="space-y-2">
-            <h2 className="text-2xl font-extrabold text-[#0f172a]">Success!</h2>
-            <p className="text-gray-500 font-medium">Admin account created successfully 🎉</p>
-          </div>
-          <p className="text-xs text-gray-400 animate-pulse">Redirecting to login interface...</p>
+
+          <h2 className="text-2xl font-bold text-slate-900">
+            Account Created
+          </h2>
+
+          <p className="text-slate-500 text-sm">
+            Your admin account is ready. Redirecting to login...
+          </p>
         </motion.div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#f8fafc] overflow-hidden relative">
-      {/* Background Decor */}
-      <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] bg-indigo-50 rounded-full blur-3xl opacity-50" />
-      <div className="absolute bottom-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-50 rounded-full blur-3xl opacity-50" />
+    <div className="min-h-screen flex items-center justify-center bg-[#f8fafc] p-4 relative overflow-hidden">
+      {/* Background */}
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-50 via-white to-blue-50" />
 
-      <motion.div 
-        initial={{ y: 20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        className="w-full max-w-md bg-white rounded-[2rem] p-8 md:p-10 shadow-xl border border-gray-100 relative z-10"
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="relative z-10 w-full max-w-md bg-white rounded-3xl p-8 shadow-xl border border-slate-100"
       >
-        <div className="flex flex-col items-center mb-8">
-          <div className="h-14 w-14 bg-indigo-600 text-white rounded-2xl flex items-center justify-center shadow-lg mb-4">
-            <ShieldCheck size={30} />
+        {/* Header */}
+        <div className="flex flex-col items-center mb-8 text-center">
+          <div className="h-14 w-14 bg-slate-900 text-white rounded-2xl flex items-center justify-center mb-4">
+            <ShieldCheck size={28} />
           </div>
-          <h1 className="text-2xl font-extrabold text-[#0f172a] tracking-tight">Create Admin Account</h1>
-          <p className="text-sm text-gray-400 font-medium mt-1">Set up your secure administrative access</p>
+
+          <h1 className="text-2xl font-bold text-slate-900">
+            Create Admin Account
+          </h1>
+
+          <p className="text-sm text-slate-500 mt-1">
+            Set up access to your admin dashboard
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          <div className="space-y-1.5">
-            <label className="text-xs font-bold text-gray-700 ml-1">Full Name</label>
-            <div className="relative group">
-              <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-indigo-600 transition-colors" size={18} />
+          {/* Error */}
+          <AnimatePresence>
+            {error && (
+              <motion.div
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-xl text-sm flex gap-2"
+                role="alert"
+              >
+                <AlertCircle size={16} />
+                {error}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Name */}
+          <div>
+            <label className="text-sm font-medium text-slate-600">
+              Full Name
+            </label>
+            <div className="relative mt-1">
+              <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Enter your full name"
-                className="w-full pl-12 pr-4 py-3.5 rounded-2xl bg-gray-50 border border-transparent focus:bg-white focus:border-indigo-100 focus:ring-4 focus:ring-indigo-50/50 outline-none text-[#0f172a] font-semibold text-sm transition-all"
+                value={form.name}
+                onChange={(e) => handleChange("name", e.target.value)}
+                className="w-full h-12 pl-10 pr-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-slate-900 outline-none text-sm"
+                placeholder="John Doe"
               />
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-bold text-gray-700 ml-1">Email Address</label>
-            <div className="relative group">
-              <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-indigo-600 transition-colors" size={18} />
+          {/* Email */}
+          <div>
+            <label className="text-sm font-medium text-slate-600">
+              Email
+            </label>
+            <div className="relative mt-1">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="Enter your email"
-                className="w-full pl-12 pr-4 py-3.5 rounded-2xl bg-gray-50 border border-transparent focus:bg-white focus:border-indigo-100 focus:ring-4 focus:ring-indigo-50/50 outline-none text-[#0f172a] font-semibold text-sm transition-all"
+                value={form.email}
+                onChange={(e) => handleChange("email", e.target.value)}
+                className="w-full h-12 pl-10 pr-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-slate-900 outline-none text-sm"
+                placeholder="admin@example.com"
               />
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <div className="flex justify-between items-center px-1">
-              <label className="text-xs font-bold text-gray-700">Password</label>
-              <span className="text-[10px] font-bold text-gray-400">Min. 6 chars</span>
-            </div>
-            <div className="relative group">
-              <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-indigo-600 transition-colors" size={18} />
+          {/* Password */}
+          <div>
+            <label className="text-sm font-medium text-slate-600">
+              Password
+            </label>
+            <div className="relative mt-1">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Create a strong password"
-                className="w-full pl-12 pr-12 py-3.5 rounded-2xl bg-gray-50 border border-transparent focus:bg-white focus:border-indigo-100 focus:ring-4 focus:ring-indigo-50/50 outline-none text-[#0f172a] font-semibold text-sm transition-all"
+                value={form.password}
+                onChange={(e) => handleChange("password", e.target.value)}
+                className="w-full h-12 pl-10 pr-10 rounded-xl border border-slate-200 focus:ring-2 focus:ring-slate-900 outline-none text-sm"
+                placeholder="Enter password"
               />
               <button
                 type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
-                title={showPassword ? "Hide Password" : "Show Password"}
+                onClick={() => setShowPassword((p) => !p)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500"
               >
                 {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-bold text-gray-700 ml-1">Admin Secret Key</label>
-            <div className="relative group">
-              <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-indigo-600 transition-colors" size={18} />
+          {/* Secret */}
+          <div>
+            <label className="text-sm font-medium text-slate-600">
+              Admin Secret Key
+            </label>
+            <div className="relative mt-1">
+              <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type={showSecret ? "text" : "password"}
-                value={secret}
-                onChange={(e) => setSecret(e.target.value)}
-                placeholder="Enter system secret key"
-                className="w-full pl-12 pr-12 py-3.5 rounded-2xl bg-gray-50 border border-transparent focus:bg-white focus:border-indigo-100 focus:ring-4 focus:ring-indigo-50/50 outline-none text-[#0f172a] font-semibold text-sm transition-all text-indigo-600"
+                value={form.secret}
+                onChange={(e) => handleChange("secret", e.target.value)}
+                className="w-full h-12 pl-10 pr-10 rounded-xl border border-slate-200 focus:ring-2 focus:ring-slate-900 outline-none text-sm"
+                placeholder="Enter secret key"
               />
               <button
                 type="button"
-                onClick={() => setShowSecret(!showSecret)}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                onClick={() => setShowSecret((p) => !p)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500"
               >
                 {showSecret ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
           </div>
 
-          <AnimatePresence mode="wait">
-            {error && (
-              <motion.div 
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="overflow-hidden"
-              >
-                <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-100 rounded-2xl">
-                  <AlertCircle className="text-red-500 shrink-0 mt-0.5" size={16} />
-                  <p className="text-xs font-bold text-red-600 leading-normal">{error}</p>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
+          {/* Submit */}
           <button
             type="submit"
             disabled={loading || adminExists}
-            className="w-full h-14 bg-[#0f172a] text-white rounded-2xl font-bold text-sm tracking-wide shadow-lg shadow-gray-200 hover:bg-gray-900 transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed transform active:scale-[0.98]"
+            className="w-full h-12 bg-slate-900 text-white rounded-xl font-semibold flex items-center justify-center gap-2 disabled:opacity-60"
           >
-            {adminExists ? "Registration Locked" : loading ? "Creating..." : "Create Admin Account"}
-            {!loading && !adminExists && <ArrowRight size={18} />}
+            {loading
+              ? "Creating account..."
+              : adminExists
+                ? "Admin already exists"
+                : "Create Account"}
+            {!loading && !adminExists && <ArrowRight size={16} />}
           </button>
         </form>
-        
-        <div className="mt-8 pt-6 border-t border-gray-50 text-center">
+
+        {/* Footer */}
+        <div className="mt-6 text-center">
           <button
-            type="button"
             onClick={() => navigate("/admin/login")}
-            className="text-xs font-bold text-gray-400 hover:text-indigo-600 transition-colors flex items-center justify-center gap-2 mx-auto"
+            className="text-sm text-slate-500 hover:text-slate-900 flex items-center gap-2 justify-center"
           >
-            <ArrowLeft size={14} />
-            Already have an account? Login
+            <ArrowLeft size={16} />
+            Back to login
           </button>
         </div>
       </motion.div>
