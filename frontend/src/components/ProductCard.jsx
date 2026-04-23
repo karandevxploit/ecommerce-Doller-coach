@@ -7,7 +7,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { formatPrice } from "../utils/format";
 import QuickSizeSelector from "./QuickSizeSelector";
 import QuickView from "./ui/QuickView";
-import LazyImage from "./ui/LazyImage";
+import SafeImage from "./ui/SafeImage";
+import VideoModal from "./common/VideoModal";
+import { Play } from "lucide-react";
 import { resolveImageUrl } from "../utils/url";
 import { useActionGuard } from "../hooks/useActionGuard";
 
@@ -17,6 +19,7 @@ const ProductCard = memo(function ProductCard({
   product = {},
   layout = "vertical"
 }) {
+  if (!product || Object.keys(product).length === 0) return null;
   const navigate = useNavigate();
   const { isAuthenticated, openAuthModal } = useAuthStore();
   const { addToCart } = useCartStore();
@@ -24,6 +27,7 @@ const ProductCard = memo(function ProductCard({
 
   const [showSizeSelector, setShowSizeSelector] = useState(false);
   const [showQuickView, setShowQuickView] = useState(false);
+  const [showVideoModal, setShowVideoModal] = useState(false);
   const [loading, setLoading] = useState(false);
 
   /* ---------------- SAFE DATA ---------------- */
@@ -117,7 +121,7 @@ const ProductCard = memo(function ProductCard({
               : "w-full aspect-[3/4]" // Taller aspect ratio for luxury fashion feel
               }`}
           >
-            <LazyImage
+            <SafeImage
               src={imageUrl}
               alt={product?.title || "Product"}
               className="group-hover:scale-110 !transition-transform !duration-700 !ease-[cubic-bezier(0.25,0.46,0.45,0.94)] object-cover"
@@ -143,6 +147,23 @@ const ProductCard = memo(function ProductCard({
                   }`}
               />
             </button>
+
+            {/* Video Badge */}
+            {product.video?.url && (
+              <button
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setShowVideoModal(true);
+                }}
+                className="absolute bottom-3 left-3 flex items-center gap-2 bg-black/60 backdrop-blur-md text-white text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 rounded-full z-10 hover:bg-black transition-all"
+              >
+                <div className="w-4 h-4 flex items-center justify-center rounded-full bg-white text-black">
+                  <Play size={8} fill="currentColor" />
+                </div>
+                <span>Play Video</span>
+              </button>
+            )}
 
             {/* Desktop Hover Actions */}
             <div className="hidden md:flex absolute inset-x-0 bottom-0 p-4 translate-y-full opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300 ease-out bg-gradient-to-t from-black/60 to-transparent gap-2 z-10">
@@ -222,6 +243,17 @@ const ProductCard = memo(function ProductCard({
               toast.success("Added to cart");
             }}
             onClose={() => setShowSizeSelector(false)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* VIDEO MODAL */}
+      <AnimatePresence>
+        {showVideoModal && product.video?.url && (
+          <VideoModal
+            videoUrl={product.video.url}
+            isOpen={showVideoModal}
+            onClose={() => setShowVideoModal(false)}
           />
         )}
       </AnimatePresence>

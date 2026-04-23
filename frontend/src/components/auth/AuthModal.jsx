@@ -5,7 +5,7 @@ import toast from "react-hot-toast";
 import { X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuthStore } from "../../store";
-import { GoogleLogin } from "@react-oauth/google";
+// import { GoogleLogin } from "@react-oauth/google"; // Removed as per manual implementation plan
 
 /**
  * COMPLETE AUTH SYSTEM (ALL-IN-ONE modal layout)
@@ -13,8 +13,8 @@ import { GoogleLogin } from "@react-oauth/google";
 
 export default function AuthSystem() {
   const navigate = useNavigate();
-  const { isAuthModalOpen, closeAuthModal, login } = useAuthStore();
-
+  const { isAuthModalOpen, closeAuthModal, login, setSession: storeSetSession } = useAuthStore();
+  
   const [mode, setMode] = useState("login"); // login | signup | forgot | otp
   const [loading, setLoading] = useState(false);
   const [remember, setRemember] = useState(true);
@@ -27,6 +27,42 @@ export default function AuthSystem() {
 
   const [otp, setOtp] = useState("");
 
+  // ================= GOOGLE GIS INITIALIZATION =================
+  useEffect(() => {
+    // Only initialize once
+    if (isAuthModalOpen && window.google) {
+      /* global google */
+      google.accounts.id.initialize({
+        client_id: "536224738397-ht6q3v710gdjb0a9ulr9okjsuv9sh7sg.apps.googleusercontent.com",
+        callback: async (response) => {
+          try {
+            setLoading(true);
+            const success = await login({ token: response.credential }, "google");
+            if (success) {
+              toast.success("Google login successful");
+              closeAuthModal();
+            }
+          } catch (err) {
+            toast.error(err?.response?.data?.message || "Google auth failed");
+          } finally {
+            setLoading(false);
+          }
+        },
+      });
+
+      google.accounts.id.renderButton(
+        document.getElementById("googleBtn"),
+        { 
+          theme: "outline", 
+          size: "large", 
+          width: "250",
+          text: "continue_with",
+          shape: "rectangular"
+        }
+      );
+    }
+  }, [isAuthModalOpen, login, closeAuthModal]);
+
   // ================= SESSION RESTORE =================
   useEffect(() => {
     const saved = localStorage.getItem("user");
@@ -36,12 +72,17 @@ export default function AuthSystem() {
   }, [closeAuthModal]);
 
   const setSession = (data) => {
-    if (remember) {
-      localStorage.setItem("user", JSON.stringify(data.user || data));
+    // 🛡️ CRITICAL: Use store's session handler to ensure token is saved to localStorage
+    const success = storeSetSession(data);
+    
+    if (success) {
+      if (remember) {
+        localStorage.setItem("user", JSON.stringify(data.user || data.data?.user || data));
+      }
+      toast.success("Login successful");
+      closeAuthModal();
+      // navigate(0) removed for better SPA experience
     }
-    toast.success("Login successful");
-    closeAuthModal();
-    navigate(0); // Refresh to update user state globally if not using store sync
   };
 
   // ================= LOGIN =================
@@ -52,12 +93,14 @@ export default function AuthSystem() {
 
     setLoading(true);
     try {
-      const res = await api.post("/auth/login", form);
-      // Wait, api might return the object directly depending on interceptor
-      const data = res?.data || res;
-      setSession(data);
-    } catch {
-      toast.error("Invalid email or password");
+      // 🛡️ Use store's login for consistency (handles token storage)
+      const success = await login({ email: form.email, password: form.password });
+      if (success) {
+        toast.success("Login successful");
+        closeAuthModal();
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.message || "Invalid email or password");
     } finally {
       setLoading(false);
     }
@@ -74,8 +117,8 @@ export default function AuthSystem() {
       await api.post("/auth/register", form);
       toast.success("Account created successfully");
       setMode("login");
-    } catch {
-      toast.error("Signup failed. Try again.");
+    } catch (err) {
+      toast.error(err?.response?.data?.message || "Signup failed. Try again.");
     } finally {
       setLoading(false);
     }
@@ -92,8 +135,8 @@ export default function AuthSystem() {
       await api.post("/auth/send-otp", { email: form.email });
       toast.success("OTP sent to your email");
       setMode("otp");
-    } catch {
-      toast.error("Failed to send OTP");
+    } catch (err) {
+      toast.error(err?.response?.data?.message || "Failed to send OTP");
     } finally {
       setLoading(false);
     }
@@ -111,8 +154,8 @@ export default function AuthSystem() {
       });
       const data = res?.data || res;
       setSession(data);
-    } catch {
-      toast.error("Invalid OTP");
+    } catch (err) {
+      toast.error(err?.response?.data?.message || "Invalid OTP");
     } finally {
       setLoading(false);
     }
@@ -292,29 +335,8 @@ export default function AuthSystem() {
             </div>
 
             <div className="flex justify-center mt-2">
-              <GoogleLogin
-                onSuccess={async (res) => {
-                  try {
-                    setLoading(true);
-                    await login(
-                      { credential: res.credential },
-                      "google"
-                    );
-                    toast.success("Google login successful");
-                    closeAuthModal();
-                    navigate(0); // refresh the page to sync
-                  } catch {
-                    toast.error("Google login failed");
-                  } finally {
-                    setLoading(false);
-                  }
-                }}
-                onError={() => toast.error("Google login failed")}
-                theme="outline"
-                size="large"
-                shape="rectangular"
-                width="100%"
-              />
+              {/* MANUAL GOOGLE BUTTON CONTAINER */}
+              <div id="googleBtn"></div>
             </div>
           </div>
 

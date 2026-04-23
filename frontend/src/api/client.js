@@ -31,7 +31,7 @@ const onTokenRefreshed = (token) => {
 };
 
 // ======================
-// REQUEST DEDUPLICATION (IMPROVED)
+// REQUEST DEDUPLICATION (ACTIVE)
 // ======================
 const pendingRequests = new Map();
 
@@ -39,26 +39,29 @@ const getRequestKey = (config) => {
   const url = config.url || "";
   const method = config.method || "get";
   const params = JSON.stringify(config.params || {});
-  const data = JSON.stringify(config.data || {});
-  return `${method}:${url}:${params}:${data}`;
+  return `${method}:${url}:${params}`;
 };
 
 // ======================
 // REFRESH TOKEN FUNCTION
 // ======================
 const refreshAccessToken = async () => {
-  const res = await axios.post(
-    `${API_BASE_URL}/auth/refresh-token`,
-    {},
-    { withCredentials: true }
-  );
+  try {
+    const res = await axios.post(
+      `${API_BASE_URL}/auth/refresh-token`,
+      {},
+      { withCredentials: true, timeout: 10000 }
+    );
 
-  const newToken = res?.data?.accessToken;
+    const newToken = res?.data?.data?.accessToken || res?.data?.accessToken;
+    if (!newToken) throw new Error("Token extraction failed");
 
-  if (!newToken) throw new Error("No token received");
-
-  setAccessToken(newToken);
-  return newToken;
+    setAccessToken(newToken);
+    return newToken;
+  } catch (err) {
+    console.error("Critical: Refresh Token Failed", err.message);
+    throw err;
+  }
 };
 
 // ======================
@@ -66,77 +69,34 @@ const refreshAccessToken = async () => {
 // ======================
 api.interceptors.request.use(
   (config) => {
-    if (config.url === "/auth/refresh") return config;
-
     if (accessToken) {
       config.headers.Authorization = `Bearer ${accessToken}`;
     }
-
     return config;
   },
   (error) => Promise.reject(error)
 );
 
 api.interceptors.response.use(
-  (response) => {
-    return response;
-  },
+  (response) => response,
   async (error) => {
-    const originalRequest = error.config;
-
-    // 🚫 Stop on 429
     if (error.response?.status === 429) {
-      console.error("[API] Rate limited");
       return Promise.reject(error);
     }
 
-    // 🚫 Non-401 → reject
-    if (!error.response || error.response.status !== 401) {
-      return Promise.reject(error);
+    if (error.response?.status === 401) {
+      const isAuthRoute = ["/login", "/register", "/auth/login", "/auth/register", "/auth/me"].some(path => 
+        window.location.pathname.includes(path) || error.config?.url?.includes(path)
+      );
+
+      if (!isAuthRoute) {
+        clearAuth();
+        const isAdminRoute = window.location.pathname.startsWith("/admin");
+        window.location.href = isAdminRoute ? "/admin/login" : "/login";
+      }
     }
 
-    // 🚫 Prevent infinite loop
-    if (originalRequest._retry) {
-      return Promise.reject(error);
-    }
-
-    // 🚫 If refresh fails
-    if (originalRequest.url === "/auth/refresh-token") {
-      clearAuth();
-      const isAdminRoute = window.location.pathname.startsWith("/admin");
-      window.location.href = isAdminRoute ? "/admin/login" : "/login";
-      return Promise.reject(error);
-    }
-
-    originalRequest._retry = true;
-
-    // 🔄 If already refreshing → queue
-    if (isRefreshing) {
-      return new Promise((resolve) => {
-        subscribeTokenRefresh((token) => {
-          originalRequest.headers.Authorization = `Bearer ${token}`;
-          resolve(api(originalRequest));
-        });
-      });
-    }
-
-    isRefreshing = true;
-
-    try {
-      const newToken = await refreshAccessToken();
-
-      onTokenRefreshed(newToken);
-
-      originalRequest.headers.Authorization = `Bearer ${newToken}`;
-      return api(originalRequest);
-    } catch (err) {
-      clearAuth();
-      const isAdminRoute = window.location.pathname.startsWith("/admin");
-      window.location.href = isAdminRoute ? "/admin/login" : "/login";
-      return Promise.reject(err);
-    } finally {
-      isRefreshing = false;
-    }
+    return Promise.reject(error);
   }
 );
 
@@ -160,7 +120,4 @@ export const clearAuth = () => {
   localStorage.removeItem("token");
 };
 
-// ======================
-// EXPORT
-// ======================
 export { api };

@@ -1,141 +1,117 @@
 const zlib = require("zlib");
-const LRU = require("lru-cache");
-const redisConfig = require("../config/redis");
+const redis = require("../config/redis");
 const { logger } = require("../utils/logger");
 
-class PerformanceCache {
+/**
+ * ARCHITECT-LEVEL HYBRID CACHE SYSTEM
+ * Features:
+ * 1. Redis Primary / In-Memory Fallback
+ * 2. In-Flight Request Deduplication (Stampede Protection)
+ * 3. Gzip Compression for large payloads
+ * 4. Automatic error handling
+ */
+
+class HybridCache {
   constructor() {
-    this.redis = redisConfig.rawClient;
-
-    this.memoryCache = new LRU({
-      max: 1000,
-      ttl: 1000 * 300 // 5 min
-    });
-
-    this.locks = new Map(); // stampede protection
+    // In-flight promises to deduplicate concurrent requests for the same key
+    this.inFlight = new Map();
   }
 
   // =========================
-  // GET
+  // CORE GET
   // =========================
   async get(key) {
-    // 🔹 Memory
-    const mem = this.memoryCache.get(key);
-    if (mem) return mem;
-
-    // 🔹 Redis
-    if (!this.redis) return null;
-
     try {
-      const val = await this.redis.get(key);
-      if (!val) return null;
+      const data = await redis.get(key);
+      if (!data) return null;
 
-      const parsed = this.deserialize(val);
-
-      this.memoryCache.set(key, parsed);
-      return parsed;
-
+      return this.deserialize(data);
     } catch (err) {
-      logger.error("[CACHE] Redis get failed:", err.message);
+      // redis.get already handles fallback internally in config/redis.js
       return null;
     }
   }
 
   // =========================
-  // SET
+  // CORE SET
   // =========================
-  async set(key, value, ttl = 300) {
+  async set(key, value, ttl = 60) {
+    if (value === undefined || value === null) return;
+
     try {
       const serialized = JSON.stringify(value);
+      const payload = serialized.length > 2048 
+        ? zlib.gzipSync(serialized).toString("base64") 
+        : serialized;
 
-      const compressed =
-        serialized.length > 1024
-          ? zlib.gzipSync(serialized).toString("base64")
-          : serialized;
-
-      this.memoryCache.set(key, value);
-
-      if (this.redis) {
-        await this.redis.setex(key, ttl, compressed);
-      }
-
+      await redis.set(key, payload, "EX", ttl);
       return true;
     } catch (err) {
-      logger.error("[CACHE] set failed:", err.message);
       return false;
     }
+  }
+
+  // =========================
+  // SMART GET-OR-SET (DEDUPLICATED)
+  // =========================
+  async getOrSet(key, fetchFn, ttl = 60) {
+    // 1. Check if same request is already in flight
+    if (this.inFlight.has(key)) {
+      return this.inFlight.get(key);
+    }
+
+    // 2. Wrap the fetch operation in a deduplicated promise
+    const fetchPromise = (async () => {
+      try {
+        // Double check cache before fetching
+        const cached = await this.get(key);
+        if (cached) return cached;
+
+        // Fetch fresh data
+        const fresh = await fetchFn();
+        
+        // Background update cache (don't block)
+        if (fresh) {
+          this.set(key, fresh, ttl).catch(e => logger.error(`[CACHE_WRITE_ERR] ${key}: ${e.message}`));
+        }
+
+        return fresh;
+      } finally {
+        // Always clean up the in-flight map
+        this.inFlight.delete(key);
+      }
+    })();
+
+    this.inFlight.set(key, fetchPromise);
+    return fetchPromise;
   }
 
   // =========================
   // DELETE
   // =========================
   async del(key) {
-    this.memoryCache.delete(key);
-
-    if (this.redis) {
-      await this.redis.del(key);
-    }
+    return redis.del(key);
   }
 
   // =========================
-  // SCAN INVALIDATION (FIXED)
-  // =========================
-  async invalidatePattern(pattern) {
-    if (!this.redis) return;
-
-    const stream = this.redis.scanStream({
-      match: pattern,
-      count: 100
-    });
-
-    for await (const keys of stream) {
-      if (keys.length) {
-        await this.redis.del(...keys);
-      }
-    }
-  }
-
-  // =========================
-  // STAMPEDE PROTECTION
-  // =========================
-  async getOrSet(key, fetchFn, ttl = 300) {
-    const cached = await this.get(key);
-    if (cached) return cached;
-
-    if (this.locks.has(key)) {
-      return this.locks.get(key);
-    }
-
-    const promise = (async () => {
-      const fresh = await fetchFn();
-      await this.set(key, fresh, ttl);
-      this.locks.delete(key);
-      return fresh;
-    })();
-
-    this.locks.set(key, promise);
-    return promise;
-  }
-
-  // =========================
-  // DESERIALIZE (SAFE)
+  // HELPERS
   // =========================
   deserialize(data) {
     try {
-      // Try decompress
-      try {
-        const decompressed = zlib
-          .gunzipSync(Buffer.from(data, "base64"))
-          .toString();
-        return JSON.parse(decompressed);
-      } catch {
-        return JSON.parse(data);
+      // Detect if gzipped (base64 + likely header)
+      if (data.length > 20 && !data.startsWith('{') && !data.startsWith('[')) {
+        try {
+          const decompressed = zlib.gunzipSync(Buffer.from(data, "base64")).toString();
+          return JSON.parse(decompressed);
+        } catch {
+          return JSON.parse(data);
+        }
       }
+      return JSON.parse(data);
     } catch (err) {
-      logger.error("[CACHE] deserialize failed:", err.message);
       return null;
     }
   }
 }
 
-module.exports = new PerformanceCache();
+module.exports = new HybridCache();

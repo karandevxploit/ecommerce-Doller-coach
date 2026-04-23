@@ -7,20 +7,8 @@ const { getRequestId } = require("./requestTracker");
 
 /**
  * ENTERPRISE FILE UPLOAD SYSTEM
- *
- * Features:
- * - File type validation (MIME + extension)
- * - Safe filename generation
- * - Scalable directory structure (date आधारित)
- * - Non-blocking FS handling
- * - Security hardened
- * - Observability with requestId
- * - Fail-safe error handling
  */
 
-const BASE_UPLOAD_DIR = path.join(__dirname, "..", "uploads");
-
-// Allowed MIME types
 const IMAGE_MIME_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -29,45 +17,22 @@ const IMAGE_MIME_TYPES = new Set([
 
 const VIDEO_MIME_TYPES = new Set([
   "video/mp4",
-  "video/mpeg",
-  "video/quicktime",
+  "video/webm",
+]);
+
+const DOCX_MIME_TYPES = new Set([
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 
 // Ensure directory exists (async safe)
 const ensureDir = async (dir) => {
   try {
-    await fs.promises.mkdir(dir, { recursive: true });
-  } catch (err) {
-    // Ignore EEXIST, log others
-    if (err.code !== "EEXIST") {
-      logger.error("Upload dir creation failed", { error: err.message });
-      throw err;
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
     }
+  } catch (err) {
+    logger.error("Upload dir creation failed", { error: err.message });
   }
-};
-
-// Generate scalable folder structure: uploads/YYYY/MM/DD
-const getUploadPath = async () => {
-  const now = new Date();
-  const dir = path.join(
-    BASE_UPLOAD_DIR,
-    String(now.getFullYear()),
-    String(now.getMonth() + 1),
-    String(now.getDate())
-  );
-
-  await ensureDir(dir);
-  return dir;
-};
-
-// Safe filename generator
-const generateFileName = (file) => {
-  const ext = path.extname(file.originalname).toLowerCase();
-  const safeExt = ext.replace(/[^a-z0-9.]/g, ""); // sanitize extension
-
-  const uniqueId = crypto.randomUUID();
-
-  return `${file.fieldname}-${uniqueId}${safeExt}`;
 };
 
 // File filter (security gate)
@@ -90,25 +55,44 @@ const fileFilter = (allowedTypes) => (req, file, cb) => {
   }
 };
 
-// Storage config (Memory for Cloudinary)
-const storage = multer.memoryStorage();
+// Storage configs
+const memoryStorage = multer.memoryStorage();
 
-// Common multer config
-const createUploader = (allowedTypes, maxSize) =>
+// Disk storage for local file processing (e.g. Docx templates)
+const diskStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, "..", "assets", "tmp");
+    ensureDir(dir);
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `template-${Date.now()}${ext}`);
+  }
+});
+
+// Common multer config factory
+const createUploader = (allowedTypes, maxSize, storage = memoryStorage) =>
   multer({
     storage,
     fileFilter: fileFilter(allowedTypes),
     limits: {
       fileSize: maxSize,
-      files: 10, // limit number of files per request
+      files: 10,
     },
   });
 
 // Upload instances
 const upload = createUploader(IMAGE_MIME_TYPES, 5 * 1024 * 1024); // 5MB images
-const videoUpload = createUploader(VIDEO_MIME_TYPES, 80 * 1024 * 1024); // 80MB videos
+const videoUpload = createUploader(VIDEO_MIME_TYPES, 20 * 1024 * 1024); // 20MB videos
+const docxUpload = createUploader(DOCX_MIME_TYPES, 5 * 1024 * 1024, diskStorage); // 5MB docx
+
+// Combined uploader for products (images + video)
+const mediaUpload = createUploader(new Set([...IMAGE_MIME_TYPES, ...VIDEO_MIME_TYPES]), 25 * 1024 * 1024);
 
 module.exports = {
   upload,
   videoUpload,
+  docxUpload,
+  mediaUpload,
 };

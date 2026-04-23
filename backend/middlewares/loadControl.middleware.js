@@ -24,10 +24,10 @@ let last = process.hrtime.bigint();
 setInterval(() => {
   const now = process.hrtime.bigint();
   const deltaMs = Number(now - last) / 1e6;
-  // expected ~1000ms interval → extra = lag
-  eventLoopLag = Math.max(0, deltaMs - 1000);
+  // expected ~60000ms interval → extra = lag
+  eventLoopLag = Math.max(0, deltaMs - 60000);
   last = now;
-}, 1000).unref();
+}, 60000).unref();
 
 // ===============================
 // ADAPTIVE TUNER (every 30s)
@@ -42,13 +42,13 @@ setInterval(() => {
     dynamicReqThreshold = Math.min(500, dynamicReqThreshold + 10);
   }
 
-  logger.info("[LOAD_TUNE]", {
-    lag: eventLoopLag,
-    activeRequests,
-    dynamicLagThreshold,
-    dynamicReqThreshold
-  });
-}, 30000).unref();
+  // logger.info("[LOAD_TUNE]", {
+  //   lag: eventLoopLag,
+  //   activeRequests,
+  //   dynamicLagThreshold,
+  //   dynamicReqThreshold
+  // });
+}, 60000).unref();
 
 // ===============================
 // REQUEST COUNTER (double-decrement safe)

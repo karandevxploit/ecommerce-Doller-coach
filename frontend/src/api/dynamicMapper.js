@@ -48,8 +48,8 @@ export const mapProduct = (item) => {
     originalPrice: safeNumber(item.originalPrice || item.price) || safeNumber(variants[0]?.price),
 
     images,
-    image: item.primaryImage || images[0] || "",
-    hoverImage: item.hoverImage || images[1] || images[0] || "",
+    image: item.primaryImage || images[0] || "/placeholder.png",
+    hoverImage: item.hoverImage || images[1] || images[0] || "/placeholder.png",
 
     video: item.video || "",
 

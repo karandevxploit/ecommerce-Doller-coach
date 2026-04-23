@@ -13,6 +13,7 @@ import toast from "react-hot-toast";
 import { getCategoryFallback } from "../utils/imageFallbacks";
 import { mapOrder } from "../api/dynamicMapper";
 import { useSafeInterval } from "../hooks/useSafeInterval";
+import SafeImage from "../components/ui/SafeImage";
 
 const StatusBadge = ({ status }) => {
   const map = {
@@ -159,7 +160,7 @@ export default function MyOrders() {
                   key={i}
                   className="flex items-center gap-3"
                 >
-                  <img
+                  <SafeImage
                     src={img}
                     alt={item?.title || "Product"}
                     className="w-14 h-14 object-cover rounded-lg"

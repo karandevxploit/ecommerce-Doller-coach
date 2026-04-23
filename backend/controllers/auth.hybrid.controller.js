@@ -19,7 +19,7 @@ const env = require("../config/env");
 const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: env.NODE_ENV === "production",
-  sameSite: "strict",
+  sameSite: "lax", // Better compatibility for cross-port localhost
 };
 
 const ACCESS_TOKEN_AGE = 15 * 60 * 1000;
@@ -50,6 +50,11 @@ const googleClient = env.GOOGLE_CLIENT_ID
 const sendTokens = async (res, user, req) => {
   const accessToken = AuthService.generateAccessToken(user);
   const refreshToken = await AuthService.generateRefreshToken(user);
+
+  res.cookie("token", accessToken, {
+    ...COOKIE_OPTIONS,
+    maxAge: REFRESH_TOKEN_AGE,
+  });
 
   res.cookie("refreshToken", refreshToken, {
     ...COOKIE_OPTIONS,
@@ -160,11 +165,13 @@ exports.refreshToken = asyncHandler(async (req, res) => {
 // LOGOUT
 // ===============================
 exports.logout = asyncHandler(async (req, res) => {
-  const token = req.cookies.refreshToken;
+  const token = req.cookies.refreshToken || req.cookies.token;
   if (token) {
     await AuthService.revokeRefreshToken(token);
   }
   res.clearCookie("refreshToken");
+  res.clearCookie("token");
+  res.clearCookie("accessToken");
   return ok(res, null, "Logged out");
 });
 
@@ -199,46 +206,88 @@ exports.verifyOtp = asyncHandler(async (req, res) => {
 // GOOGLE LOGIN (SAFE)
 // ===============================
 exports.google = asyncHandler(async (req, res) => {
-  if (!googleClient) return fail(res, "Not configured", 503);
-
-  const ticket = await googleClient.verifyIdToken({
-    idToken: req.body.token,
-    audience: env.GOOGLE_CLIENT_ID,
-  });
-
-  const { email, name, sub } = ticket.getPayload();
-
-  let user = await User.findOne({ email });
-
-  if (user && user.provider !== "google") {
-    return fail(res, "Use original login method", 409);
+  if (!googleClient) {
+    logger.error("[GOOGLE_AUTH] googleClient not initialized");
+    return fail(res, "Google Auth is not configured", 503);
   }
 
-  if (!user) {
-    user = await User.create({
-      name,
-      email,
-      googleId: sub,
-      provider: "google",
-      emailVerified: true,
-      password: crypto.randomBytes(32).toString("hex"),
+  logger.info("[GOOGLE_AUTH_REQUEST]", { bodyKeys: Object.keys(req.body || {}) });
+
+  const idToken = req.body?.token || req.body?.credential || req.body?.idToken;
+
+  if (!idToken || typeof idToken !== "string") {
+    logger.warn("[GOOGLE_AUTH_MISSING_TOKEN]", { body: req.body });
+    return fail(res, "Google ID Token is missing or invalid", 400);
+  }
+
+  try {
+    logger.debug("[GOOGLE_AUTH_VERIFYING]", { tokenLength: idToken.length });
+    const ticket = await googleClient.verifyIdToken({
+      idToken: idToken,
+      audience: env.GOOGLE_CLIENT_ID,
     });
-  }
 
-  return sendTokens(res, user, req);
+    const payload = ticket.getPayload();
+    const { email, name, sub, picture } = payload;
+
+    if (!email) {
+      return fail(res, "Google account must have an email associated", 400);
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    let user = await User.findOne({ email: normalizedEmail });
+
+    // 1. Check if user exists but used different provider
+    if (user && user.provider !== "google") {
+      logger.warn("[GOOGLE_AUTH_CONFLICT]", { email: normalizedEmail, provider: user.provider });
+      return fail(res, `This email is already registered using ${user.provider}. Please log in with your password.`, 409);
+    }
+
+    // 2. Create user if not exists
+    if (!user) {
+      logger.info("[GOOGLE_AUTH_NEW_USER]", { email: normalizedEmail });
+      user = await User.create({
+        name: name || "Google User",
+        email: normalizedEmail,
+        googleId: sub,
+        provider: "google",
+        emailVerified: true,
+        isVerified: true,
+        avatar: picture || "",
+        password: crypto.randomBytes(32).toString("hex"), // Dummy password for schema requirement
+      });
+    } else {
+      // Update avatar if changed
+      if (picture && user.avatar !== picture) {
+        user.avatar = picture;
+        await user.save();
+      }
+    }
+
+    logger.info("[GOOGLE_AUTH_SUCCESS]", { email: normalizedEmail });
+    return sendTokens(res, user, req);
+
+  } catch (err) {
+    logger.error("[GOOGLE_AUTH_ERROR]", { message: err.message, stack: err.stack });
+    return fail(res, `Google Authentication failed: ${err.message}`, 401);
+  }
 });
 
 // ===============================
-// ADMIN: EXISTS (Lightweight)
+// ADMIN: EXISTS (Hybrid Cached)
 // ===============================
 exports.adminExists = asyncHandler(async (req, res) => {
-  try {
+  const cache = require("../services/cache.service");
+  
+  return cache.getOrSet("admin:exists", async () => {
     const exists = await User.exists({ role: "admin" }).maxTimeMS(2000);
-    return ok(res, { exists: !!exists });
-  } catch (err) {
+    return { exists: !!exists };
+  }, 300).then(data => {
+    return ok(res, data);
+  }).catch(err => {
     logger.error("[ADMIN_EXISTS_ERROR]", err.message);
-    return fail(res, "Service unavailable", 500);
-  }
+    return ok(res, { exists: true }); // Fail-safe
+  });
 });
 
 // ===============================

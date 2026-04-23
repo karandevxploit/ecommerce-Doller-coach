@@ -38,8 +38,7 @@ class BaseRepository {
       return await this.model
         .findById(id, select)
         .populate(populate)
-        .lean()
-        .read("secondaryPreferred");
+        .lean();
     } catch (err) {
       logger.error("REPO_FIND_BY_ID_FAILED", {
         requestId,
@@ -62,8 +61,7 @@ class BaseRepository {
         .findOne({ ...filter, isDeleted: false })
         .select(select)
         .populate(populate)
-        .lean()
-        .read("secondaryPreferred");
+        .lean();
     } catch (err) {
       logger.error("REPO_FIND_ONE_FAILED", {
         requestId,
@@ -115,8 +113,7 @@ class BaseRepository {
         .limit(limit)
         .select(select)
         .populate(populate)
-        .lean()
-        .read("secondaryPreferred");
+        .lean();
     } catch (err) {
       logger.error("REPO_FIND_FAILED", {
         requestId,

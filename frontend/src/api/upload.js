@@ -44,10 +44,6 @@ const compressImage = (file, quality = 0.7) => {
   });
 };
 
-// Extract URL safely
-const extractUrl = (data) =>
-  data?.file?.url || data?.url || data?.imageUrl || "";
-
 // ======================
 // CORE UPLOAD WITH PROGRESS + RETRY
 // ======================
@@ -119,6 +115,10 @@ export const uploadMultipleImages = async (files, onProgress) => {
   return res.data.urls;
 };
 
+// Extract URL safely
+export const extractUrl = (data) =>
+  data?.data?.videoUrl || data?.data?.url || data?.url || data?.imageUrl || "";
+
 // ======================
 // PRODUCT VIDEO UPLOAD
 // ======================
@@ -126,16 +126,20 @@ export const uploadProductVideo = async (file, onProgress) => {
   const formData = new FormData();
   formData.append("video", file);
 
-  const data = await uploadWithProgress({
+  const res = await uploadWithProgress({
     url: "/uploads/video",
     formData,
     onProgress,
   });
 
-  const url = extractUrl(data);
-  if (!url) throw new Error("Video upload failed");
+  const videoData = res.data?.data || res.data;
+  if (!videoData?.url && !videoData?.videoUrl) throw new Error("Video upload failed");
 
-  return url;
+  return {
+    url: videoData.url || videoData.videoUrl,
+    publicId: videoData.publicId || videoData.public_id,
+    size: videoData.size || file.size
+  };
 };
 
 /**

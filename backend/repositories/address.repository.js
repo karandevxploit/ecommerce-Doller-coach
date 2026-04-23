@@ -32,8 +32,7 @@ class AddressRepository extends BaseRepository {
       return await this.model
         .find(query, options.projection || null)
         .sort({ isDefault: -1, createdAt: -1 })
-        .lean()
-        .read("secondaryPreferred"); // scale reads
+        .lean();
     } catch (err) {
       logger.error("ADDRESS_FETCH_FAILED", {
         userId,
@@ -44,12 +43,19 @@ class AddressRepository extends BaseRepository {
   }
 
   /**
-   * SAFE DEFAULT SWITCH (TRANSACTION)
+   * UNSET ALL DEFAULTS FOR USER
+   */
+  async unsetDefaults(userId) {
+    return await this.model.updateMany(
+      { userId, isDefault: true },
+      { $set: { isDefault: false } }
+    );
+  }
+
+  /**
+   * SAFE DEFAULT SWITCH
    */
   async setDefaultAddress(userId, addressId) {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
     try {
       // Validate ObjectId
       if (!mongoose.Types.ObjectId.isValid(addressId)) {
@@ -57,37 +63,26 @@ class AddressRepository extends BaseRepository {
       }
 
       // Unset previous defaults
-      await this.model.updateMany(
-        { userId, isDefault: true },
-        { $set: { isDefault: false } },
-        { session }
-      );
+      await this.unsetDefaults(userId);
 
       // Set new default
       const updated = await this.model.findOneAndUpdate(
         { _id: addressId, userId, isDeleted: false },
         { $set: { isDefault: true } },
-        { new: true, session }
+        { new: true }
       );
 
       if (!updated) {
         throw new Error("Address not found");
       }
 
-      await session.commitTransaction();
-      session.endSession();
-
       return updated.toObject();
     } catch (err) {
-      await session.abortTransaction();
-      session.endSession();
-
       logger.error("SET_DEFAULT_ADDRESS_FAILED", {
         userId,
         addressId,
         error: err.message,
       });
-
       throw err;
     }
   }

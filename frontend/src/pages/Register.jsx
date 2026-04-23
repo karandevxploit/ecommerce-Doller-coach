@@ -15,13 +15,11 @@ import { api } from "../api/client";
 import { useForm } from "../hooks/useForm";
 import { registerValidator } from "../utils/validation";
 import { useAuthStore } from "../store";
-import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import { motion, AnimatePresence } from "framer-motion";
 
 export default function Register() {
   const navigate = useNavigate();
   const { openAuthModal } = useAuthStore();
-  const { executeRecaptcha } = useGoogleReCaptcha();
 
   const [showPassword, setShowPassword] = useState(false);
 
@@ -47,17 +45,9 @@ export default function Register() {
 
   /* ---------------- REGISTER ---------------- */
   const handleRegister = async (formData) => {
-    if (!executeRecaptcha) {
-      toast.error("Please wait, verifying security...");
-      return;
-    }
-
     try {
-      const token = await executeRecaptcha("register");
-
       await api.post("/auth/register", {
         ...formData,
-        recaptchaToken: token,
       });
 
       toast.success("Verification code sent to your email");

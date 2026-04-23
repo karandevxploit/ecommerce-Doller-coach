@@ -6,7 +6,7 @@ const Offer = require("../models/offer.model");
 
 const { broadcastOffer } = require("../services/notification.service");
 const { broadcastOfferEmail } = require("../services/email.service");
-const { safeCall } = require("../config/redis");
+const cache = require("../services/cache.service");
 const { logger } = require("../utils/logger");
 
 const CACHE_KEY = "offers:active";
@@ -64,35 +64,32 @@ const validateOffer = (payload) => {
 };
 
 // ===============================
-// GET ACTIVE OFFERS (CACHED)
+// GET ACTIVE OFFERS (HYBRID CACHED)
 // ===============================
 exports.getActiveOffers = asyncHandler(async (_req, res) => {
-  const cached = await safeCall((r) => r.get(CACHE_KEY));
-  if (cached) {
-    return ok(res, JSON.parse(cached), "Offers (cache)");
-  }
+  return cache.getOrSet(CACHE_KEY, async () => {
+    const now = new Date();
 
-  const now = new Date();
+    const offers = await Offer.find({
+      isActive: true,
+      endDate: { $gte: now },
+    })
+      .sort({ priority: -1 })
+      .select("title image description discountType discountValue startDate endDate usageLimit usedCount couponCode priority")
+      .lean();
 
-  const offers = await Offer.find({
-    isActive: true,
-    endDate: { $gte: now },
-  })
-    .sort({ priority: -1 })
-    .select("title image description discountType discountValue startDate endDate usageLimit usedCount couponCode priority")
-    .lean();
+    const formatted = offers.map((o) => ({
+      ...o,
+      status: calculateStatus(o),
+    }));
 
-  const formatted = offers.map((o) => ({
-    ...o,
-    status: calculateStatus(o),
-  }));
-
-  // async cache
-  safeCall((r) =>
-    r.set(CACHE_KEY, JSON.stringify(formatted), "EX", CACHE_TTL)
-  );
-
-  return ok(res, formatted, "Offers (db)");
+    return formatted;
+  }, 60).then(data => {
+    return ok(res, data, "Offers fetched");
+  }).catch(err => {
+    logger.error("[OFFERS_GET_ERROR]", err);
+    return ok(res, [], "Fallback");
+  });
 });
 
 // ===============================

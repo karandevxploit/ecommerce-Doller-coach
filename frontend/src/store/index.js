@@ -81,18 +81,25 @@ export const useAuthStore = create(
 
       /* ---------------- SESSION ---------------- */
       setSession: (res) => {
-        const userData =
-          res?.user || res?.data?.user;
-        const token =
-          res?.accessToken ||
-          res?.token ||
-          res?.data?.accessToken ||
-          res?.data?.token;
+        // Handle various response wrappers (Axios, Fetch, or direct data)
+        const root = res?.data || res;
+        const payload = root?.data || root;
 
-        if (!userData || !token) return false;
+        const userData = payload?.user || payload;
+        const token = payload?.accessToken || payload?.token;
 
-        const isAdmin =
-          userData.role === "admin";
+        console.log(">>> [AUTH_STORE] Setting Session:", { 
+          hasUser: !!userData, 
+          hasToken: !!token,
+          email: userData?.email 
+        });
+
+        if (!userData || !token || typeof token !== "string") {
+          console.error(">>> [AUTH_STORE] Failed to set session: Missing data", { payload });
+          return false;
+        }
+
+        const isAdmin = userData.role === "admin";
 
         setAccessToken(token);
 
@@ -107,59 +114,33 @@ export const useAuthStore = create(
         return true;
       },
 
-      /* ---------------- FETCH USER ---------------- */
-      fetchUser: async (force = false) => {
-        if (get().isFetchingUser) return;
-        if (get().isInitialized && !force) return;
-
-        const token =
-          localStorage.getItem("accessToken") ||
-          localStorage.getItem("token");
-
-        if (!token) {
-          set({
-            user: null,
-            isAuthenticated: false,
-            isInitialized: true,
-          });
-          return;
-        }
-
-        set({ isFetchingUser: true });
-
+      /* ---------------- FETCH USER (PERSISTENCE) ---------------- */
+      fetchUser: async () => {
+        set({ loading: true });
+        
         try {
-          const res = await api.get(
-            ENDPOINTS.AUTH.PROFILE
-          );
+          // We always try /me because withCredentials: true sends the token cookie automatically
+          const res = await api.get("/auth/me");
+          
+          const root = res?.data || res;
+          const userData = root?.user || root?.data?.user || root?.data;
 
-          const userData =
-            res?.user || res?.data || res;
-
-          if (!userData?.email) {
-            throw new Error("Invalid user");
+          if (userData && userData.id) {
+            set({
+              user: mapUser(userData),
+              isAuthenticated: true,
+              isAdminAuthenticated: userData.role === "admin",
+              isInitialized: true,
+            });
+          } else {
+             set({ isAuthenticated: false, isInitialized: true });
           }
-
-          set({
-            user: mapUser(userData),
-            isAuthenticated: true,
-            isAdminAuthenticated:
-              userData.role === "admin",
-            isInitialized: true,
-          });
-        } catch {
-          clearAuth();
-
-          set({
-            user: null,
-            isAuthenticated: false,
-            isAdminAuthenticated: false,
-            isInitialized: true,
-          });
+        } catch (err) {
+          console.error("Auth restore failed", err);
+          clearAuth(); // Clears local storage
+          set({ user: null, isAuthenticated: false, isInitialized: true });
         } finally {
-          set({
-            isFetchingUser: false,
-            loading: false,
-          });
+          set({ loading: false });
         }
       },
 
@@ -176,7 +157,12 @@ export const useAuthStore = create(
           isInitialized: true,
         });
 
-        localStorage.removeItem("auth-storage");
+        // Use setTimeout to ensure state is flushed before clearing storage
+        setTimeout(() => {
+          localStorage.removeItem("auth-storage");
+          localStorage.removeItem("token");
+          localStorage.removeItem("accessToken");
+        }, 100);
       },
 
       /* ---------------- ADDRESSES ---------------- */

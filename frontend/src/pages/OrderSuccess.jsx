@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { formatPrice } from "../utils/format";
 import { motion } from "framer-motion";
+import SafeImage from "../components/ui/SafeImage";
 
 /* ---------------- HEADER ---------------- */
 const SuccessHeader = () => (
@@ -66,8 +67,8 @@ const OrderCard = ({ order }) => {
       {/* Items */}
       {order?.products?.map((p, i) => (
         <div key={i} className="flex gap-3 items-center">
-          <img
-            src={p.image || "/placeholder.png"}
+          <SafeImage
+            src={p.image}
             alt={p.title || "Product"}
             className="w-14 h-14 object-cover rounded-lg"
           />

@@ -1,50 +1,81 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
 /**
- * useAutoLogout hook
- * @param {number} timeout - Inactivity period in milliseconds (default 10 minutes)
+ * useAutoLogout
+ * Handles inactivity logout with performance optimization + multi-tab sync
  */
-export default function useAutoLogout(timeout = 7200000) {
+export default function useAutoLogout({
+  timeout = 2 * 60 * 60 * 1000, // 2 hours
+  redirectTo = "/admin/login",
+  storageKeys = ["adminToken", "adminUser", "token", "auth-storage"]
+} = {}) {
   const navigate = useNavigate();
   const timerRef = useRef(null);
+  const lastActivityRef = useRef(Date.now());
 
-  const logout = () => {
-    console.warn("[useAutoLogout] Triggering inactivity logout...");
-    localStorage.removeItem("adminToken");
-    localStorage.removeItem("adminUser");
-    // Also clear general auth if needed, but the requirement was specifically admin security
-    localStorage.removeItem("token"); 
-    localStorage.removeItem("auth-storage");
-    
-    navigate("/admin/login");
-    window.location.reload(); // Hard reset to clear stores/state
-  };
+  /* ---------------- LOGOUT ---------------- */
+  const logout = useCallback(() => {
+    storageKeys.forEach((key) => localStorage.removeItem(key));
 
-  const resetTimer = () => {
+    // Notify other tabs
+    localStorage.setItem("logout-event", Date.now());
+
+    navigate(redirectTo, { replace: true });
+  }, [navigate, redirectTo, storageKeys]);
+
+  /* ---------------- RESET TIMER (THROTTLED) ---------------- */
+  const resetTimer = useCallback(() => {
+    const now = Date.now();
+
+    // throttle: ignore too frequent events
+    if (now - lastActivityRef.current < 1000) return;
+
+    lastActivityRef.current = now;
+
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(logout, timeout);
-  };
+  }, [logout, timeout]);
 
+  /* ---------------- EFFECT ---------------- */
   useEffect(() => {
-    // Initial timer
     resetTimer();
 
-    // Event listeners for activity tracking
-    const events = ["mousemove", "keypress", "click", "scroll", "touchstart"];
-    
-    events.forEach((event) => {
-      window.addEventListener(event, resetTimer);
-    });
+    const events = ["mousemove", "keydown", "click", "scroll", "touchstart"];
 
-    // Cleanup
+    events.forEach((event) =>
+      window.addEventListener(event, resetTimer, { passive: true })
+    );
+
+    /* ---------------- TAB SYNC ---------------- */
+    const handleStorage = (e) => {
+      if (e.key === "logout-event") {
+        navigate(redirectTo, { replace: true });
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+
+    /* ---------------- VISIBILITY CHANGE ---------------- */
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        resetTimer();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
-      events.forEach((event) => {
-        window.removeEventListener(event, resetTimer);
-      });
+
+      events.forEach((event) =>
+        window.removeEventListener(event, resetTimer)
+      );
+
+      window.removeEventListener("storage", handleStorage);
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [timeout]);
+  }, [resetTimer, navigate, redirectTo]);
 
   return { resetTimer };
 }

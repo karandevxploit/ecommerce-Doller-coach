@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 
 const { safeHandler } = require("../middlewares/error.middleware");
 const { protect, authorize } = require("../middlewares/auth.middleware");
-const { upload } = require("../middlewares/upload.middleware");
+const { upload, mediaUpload } = require("../middlewares/upload.middleware");
 const { cacheRoute, clearCache } = require("../middlewares/cache.middleware");
 const { authLimiter } = require("../middlewares/rateLimiter.v2");
 const { logger } = require("../utils/logger");
@@ -66,6 +66,10 @@ router.post(
     protect,
     authorize("admin"),
     authLimiter,
+    mediaUpload.fields([
+      { name: 'image', maxCount: 1 },
+      { name: 'video', maxCount: 1 }
+    ]),
     clearCache("products"),
     safeHandler(async (req, res, next) => {
         try {
@@ -94,6 +98,10 @@ router.put(
     authorize("admin"),
     authLimiter,
     validateObjectId,
+    mediaUpload.fields([
+      { name: 'image', maxCount: 1 },
+      { name: 'video', maxCount: 1 }
+    ]),
     clearCache("products"),
     safeHandler(async (req, res, next) => {
         try {
@@ -113,6 +121,23 @@ router.put(
                 productId: req.params.id,
                 error: err.message,
             });
+            next(err);
+        }
+    })
+);
+
+router.delete(
+    "/:id/video",
+    protect,
+    authorize("admin"),
+    authLimiter,
+    validateObjectId,
+    clearCache("products"),
+    safeHandler(async (req, res, next) => {
+        try {
+            const { deleteVideo } = require("../controllers/product.controller");
+            await deleteVideo(req, res);
+        } catch (err) {
             next(err);
         }
     })

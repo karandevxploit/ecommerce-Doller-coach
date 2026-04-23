@@ -48,7 +48,8 @@ const defaultForm = {
     codAllowed: true,
     showETA: true,
     allowWishlist: true
-  }
+  },
+  video: { url: null, publicId: null, size: 0 }
 };
 
 const TABS = [
@@ -97,7 +98,8 @@ const normalizeProductForForm = (data) => {
     category: typeof data.category === 'object' ? (data.category?.main || 'men').toLowerCase() : data.category,
     sizes: allSizes,
     variants: groupedVariants.length > 0 ? groupedVariants : defaultForm.variants,
-    trending: !!data.isTrending
+    trending: !!data.isTrending,
+    video: data.video || defaultForm.video
   };
 };
 
@@ -236,6 +238,42 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
     }));
   };
 
+  const [videoFile, setVideoFile] = useState(null);
+  const [imageFile, setImageFile] = useState(null);
+
+  const handleVideoUpload = (file) => {
+    if (!file) return;
+    if (file.size > 20 * 1024 * 1024) return toast.error("Video too large (max 20MB)");
+    
+    // Create local preview
+    const localUrl = URL.createObjectURL(file);
+    setVideoFile(file);
+    updateField('video', { ...formData.video, url: localUrl, isLocal: true });
+    toast.success("Video selected for upload");
+  };
+
+  const handleVideoDelete = async () => {
+    if (!formData.video?.url) return;
+    if (!window.confirm("Remove video?")) return;
+
+    try {
+      if (initialData?._id && !formData.video.isLocal) {
+         toast.loading("Deleting video...", { id: 'v-del' });
+         const res = await api.delete(`/admin/products/${initialData._id}/video`);
+         if (res.data.success) {
+           updateField('video', { url: null, publicId: null, size: 0 });
+           setVideoFile(null);
+           toast.success("Video removed", { id: 'v-del' });
+         }
+      } else {
+         updateField('video', { url: null, publicId: null, size: 0 });
+         setVideoFile(null);
+      }
+    } catch (err) {
+      toast.error("Failed to delete video");
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!isValid) return toast.error("Please complete the form properly");
@@ -243,14 +281,11 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
     setIsSaving(true);
 
     try {
-      // 1. DATA TRANSFORMATION: Flatten grouped color-variants into the flat schema Mongoose expects
-      // Mongoose expects: variants: [{ sku, color, size, price, stock, image }]
       const allImages = formData.variants.flatMap(v => v.images);
       
       const flatVariants = formData.variants.flatMap(v => 
         v.sizes.map(sz => {
           const baseSku = v.sku || `${formData.title.substring(0, 3).toUpperCase()}-${(v.color || 'XX').substring(0, 2).toUpperCase()}`;
-          // Generate ultra-unique SKU for each variant to prevent 409 Conflict
           const uniqueSku = `${baseSku}-${sz.size}-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
           return {
             sku: uniqueSku,
@@ -263,59 +298,55 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
         })
       ).filter(v => v.size);
 
-      // 2. PARTIAL UPDATE LOGIC (SMART PATCH)
-      const getPayload = () => {
-        const fullPayload = {
-          name: formData.title,
-          description: formData.description,
-          category: typeof formData.category === 'object' ? (formData.category?.main || "men").toLowerCase() : formData.category,
-          subcategory: formData.subcategory,
-          productType: formData.productType,
-          price: Number(formData.price),
-          originalPrice: Number(formData.originalPrice),
-          images: allImages,
-          primaryImage: allImages[0] || "",
-          hoverImage: allImages[1] || allImages[0] || "",
-          variants: flatVariants,
-          status: formData.status,
-          featured: !!formData.featured,
-          isTrending: !!formData.trending,
-          stock: flatVariants.reduce((sum, v) => sum + v.stock, 0),
-          badge: formData.badge,
-          offer: formData.offer,
-          controls: formData.controls
-        };
-
-        if (!initialData?._id) return fullPayload;
-
-        // Perform shallow diff for partial update
-        const changes = {};
-        const original = normalizeProductForForm(initialData);
-
-        Object.keys(fullPayload).forEach(key => {
-          // Special handling for nested objects/arrays (simple JSON check)
-          if (JSON.stringify(fullPayload[key]) !== JSON.stringify(original[key])) {
-             changes[key] = fullPayload[key];
-          }
-        });
-
-        // Always ensure we have some data
-        return Object.keys(changes).length > 0 ? changes : null;
+      const fullPayload = {
+        name: formData.title,
+        description: formData.description,
+        category: typeof formData.category === 'object' ? (formData.category?.main || "men").toLowerCase() : formData.category,
+        subcategory: formData.subcategory,
+        productType: formData.productType,
+        price: Number(formData.price),
+        originalPrice: Number(formData.originalPrice),
+        images: allImages,
+        primaryImage: allImages[0] || "",
+        hoverImage: allImages[1] || allImages[0] || "",
+        variants: flatVariants,
+        status: formData.status,
+        featured: !!formData.featured,
+        isTrending: !!formData.trending,
+        isBestSeller: !!formData.isBestSeller,
+        stock: flatVariants.reduce((sum, v) => sum + v.stock, 0),
+        badge: formData.badge,
+        offer: formData.offer,
+        controls: formData.controls,
+        video: videoFile ? undefined : formData.video // Don't send old video object if new file exists
       };
 
-      const payload = getPayload();
+      // 3. MULTIPART SUBMISSION
+      const formDataToSend = new FormData();
+      
+      // Append non-file fields
+      Object.keys(fullPayload).forEach(key => {
+        if (fullPayload[key] === undefined) return;
+        if (typeof fullPayload[key] === 'object') {
+          formDataToSend.append(key, JSON.stringify(fullPayload[key]));
+        } else {
+          formDataToSend.append(key, fullPayload[key]);
+        }
+      });
 
-      if (initialData?._id && !payload) {
-        setIsSaving(false);
-        return onCancel(); // No changes made
+      // Append files
+      if (videoFile) {
+        formDataToSend.append('video', videoFile);
       }
-
-      console.log("[AXIOS] SENDING PAYLOAD:", JSON.stringify(payload, null, 2));
+      // If we had a primary image file, we'd append it here too
+      // if (imageFile) formDataToSend.append('image', imageFile);
 
       const method = initialData?._id ? 'put' : 'post';
       const endpoint = initialData?._id ? `/admin/products/${initialData._id}` : '/admin/products';
       
-      const res = await api[method](endpoint, payload);
+      const res = await api[method](endpoint, formDataToSend, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
       
       if (res.data.success) {
         toast.success(initialData?._id ? "Product updated!" : "Product created!");
@@ -448,6 +479,49 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
                 className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-slate-900 transition-all font-medium min-h-[120px]"
                 placeholder="Product narrative..."
               />
+            </div>
+
+            {/* VIDEO SECTION */}
+            <div className="p-8 border-2 border-dashed border-slate-100 rounded-[2.5rem] bg-slate-50/30 space-y-4">
+               <div className="flex justify-between items-center">
+                  <div>
+                    <h4 className="text-sm font-black text-slate-900">Product Video</h4>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Optional 20MB Max • MP4/WEBM</p>
+                  </div>
+                  {formData.video?.url && (
+                    <button 
+                      type="button" 
+                      onClick={handleVideoDelete}
+                      className="p-2 bg-white text-rose-500 rounded-xl shadow-lg border border-slate-100 hover:bg-rose-50 transition-all"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+               </div>
+
+               {formData.video?.url ? (
+                 <div className="relative aspect-video rounded-3xl overflow-hidden shadow-2xl border border-white">
+                    <video 
+                      src={formData.video.url} 
+                      className="w-full h-full object-cover"
+                      controls
+                    />
+                 </div>
+               ) : (
+                 <label className="flex flex-col items-center justify-center py-10 bg-white border border-slate-100 rounded-3xl cursor-pointer hover:bg-slate-50 transition-all group">
+                    <div className="w-12 h-12 bg-slate-900 text-white rounded-2xl flex items-center justify-center mb-4 shadow-xl group-hover:scale-110 transition-transform">
+                       <Upload size={20} />
+                    </div>
+                    <span className="text-xs font-black text-slate-900 uppercase tracking-widest">Upload Cinematic Clip</span>
+                    <span className="text-[10px] text-slate-400 mt-1">Enhance conversion by 35%</span>
+                    <input 
+                      type="file" 
+                      accept="video/mp4,video/webm" 
+                      className="hidden" 
+                      onChange={e => handleVideoUpload(e.target.files[0])}
+                    />
+                 </label>
+               )}
             </div>
           </div>
         );
@@ -673,6 +747,7 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
                     { label: 'Status', field: 'status', options: ['draft', 'active'] },
                     { label: 'Featured Product', field: 'featured', type: 'toggle' },
                     { label: 'Trending', field: 'trending', type: 'toggle' },
+                    { label: 'Best Seller', field: 'isBestSeller', type: 'toggle' },
                   ].map((item, idx) => (
                     <div key={idx} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl">
                       <span className="text-sm font-bold text-slate-700">{item.label}</span>

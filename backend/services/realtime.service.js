@@ -99,6 +99,7 @@ class RealtimeService {
       });
       
       socket.on("disconnect", (reason) => {
+        socket.removeAllListeners();
         logger.info(`[SOCKET_DISCONNECT] ID: ${socket.id} Reason: ${reason}`);
       });
     });

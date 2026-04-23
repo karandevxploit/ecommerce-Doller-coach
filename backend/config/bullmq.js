@@ -6,13 +6,16 @@ const { logger } = require("../utils/logger");
 const QUEUE_OPT = {
   connection: redisRaw,
   defaultJobOptions: {
-    attempts: 3,
+    attempts: 5, // Increased for resilience on free-tier Redis
     backoff: {
       type: "exponential",
       delay: 5000,
     },
-    removeOnComplete: true,
-    removeOnFail: false,
+    removeOnComplete: {
+      count: 100, // Keep last 100 for debugging instead of instant deletion
+      age: 3600,  // Or 1 hour
+    },
+    removeOnFail: true, // Auto-remove to save memory
   },
 };
 

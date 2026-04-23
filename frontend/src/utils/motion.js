@@ -1,105 +1,161 @@
 /**
- * Doller Coach • Motion Design System
- * Global animation variants and transition configurations for Framer Motion.
+ * Motion Design System (Production-Ready)
+ * - Accessible (reduced motion)
+ * - Reusable (dynamic variants)
+ * - Consistent across app
  */
 
-export const standardTransition = {
-  duration: 0.4,
-  ease: [0.23, 1, 0.32, 1], // Custom cubic-bezier for a "Luxury Glide"
-};
+/* ---------------- ACCESSIBILITY ---------------- */
+const prefersReducedMotion =
+  typeof window !== "undefined" &&
+  window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-export const snappyTransition = {
-  duration: 0.25,
-  ease: [0.4, 0, 0.2, 1],
-};
+/* ---------------- BASE TRANSITIONS ---------------- */
+export const standardTransition = prefersReducedMotion
+  ? { duration: 0 }
+  : {
+    duration: 0.4,
+    ease: [0.23, 1, 0.32, 1],
+  };
 
-export const springTransition = {
-  type: "spring",
-  stiffness: 400,
-  damping: 25,
-};
+export const snappyTransition = prefersReducedMotion
+  ? { duration: 0 }
+  : {
+    duration: 0.25,
+    ease: [0.4, 0, 0.2, 1],
+  };
 
-export const staggerContainer = (staggerChildren = 0.08, delayChildren = 0) => ({
-  hidden: { opacity: 0 },
+export const springTransition = prefersReducedMotion
+  ? { duration: 0 }
+  : {
+    type: "spring",
+    stiffness: 400,
+    damping: 25,
+  };
+
+/* ---------------- STAGGER ---------------- */
+export const staggerContainer = (
+  staggerChildren = 0.08,
+  delayChildren = 0
+) => ({
+  hidden: {},
   visible: {
-    opacity: 1,
     transition: {
-      staggerChildren,
+      staggerChildren: prefersReducedMotion
+        ? 0
+        : staggerChildren,
       delayChildren,
     },
   },
 });
 
+/* ---------------- FADE ---------------- */
 export const fadeIn = {
   hidden: { opacity: 0 },
-  visible: { 
-    opacity: 1, 
-    transition: standardTransition 
+  visible: {
+    opacity: 1,
+    transition: standardTransition,
   },
-  exit: { 
-    opacity: 0, 
-    transition: snappyTransition 
-  }
+  exit: {
+    opacity: 0,
+    transition: snappyTransition,
+  },
 };
 
-export const slideUp = {
-  hidden: { opacity: 0, y: 20 },
-  visible: { 
-    opacity: 1, 
-    y: 0, 
-    transition: standardTransition 
-  },
-  exit: { 
-    opacity: 0, 
-    y: 10, 
-    transition: snappyTransition 
-  }
+/* ---------------- SLIDE (DYNAMIC) ---------------- */
+export const slide = ({
+  direction = "up",
+  distance = 20,
+} = {}) => {
+  const axis =
+    direction === "left" || direction === "right"
+      ? "x"
+      : "y";
+
+  const value =
+    direction === "left" || direction === "up"
+      ? -distance
+      : distance;
+
+  return {
+    hidden: {
+      opacity: 0,
+      [axis]: prefersReducedMotion ? 0 : value,
+    },
+    visible: {
+      opacity: 1,
+      [axis]: 0,
+      transition: standardTransition,
+    },
+    exit: {
+      opacity: 0,
+      [axis]: prefersReducedMotion
+        ? 0
+        : value / 2,
+      transition: snappyTransition,
+    },
+  };
 };
 
-export const slideInRight = {
-  hidden: { opacity: 0, x: 40 },
-  visible: { 
-    opacity: 1, 
-    x: 0, 
-    transition: standardTransition 
-  },
-  exit: { 
-    opacity: 0, 
-    x: -40, 
-    transition: snappyTransition 
-  }
-};
-
+/* ---------------- SCALE ---------------- */
 export const scaleIn = {
-  hidden: { opacity: 0, scale: 0.95 },
-  visible: { 
-    opacity: 1, 
-    scale: 1, 
-    transition: standardTransition 
+  hidden: {
+    opacity: 0,
+    scale: prefersReducedMotion ? 1 : 0.95,
   },
-  exit: { 
-    opacity: 0, 
-    scale: 1.05, 
-    transition: snappyTransition 
-  }
+  visible: {
+    opacity: 1,
+    scale: 1,
+    transition: standardTransition,
+  },
+  exit: {
+    opacity: 0,
+    scale: prefersReducedMotion ? 1 : 1.05,
+    transition: snappyTransition,
+  },
 };
 
-export const modalTransition = {
-  hidden: { opacity: 0, scale: 0.9, y: 20 },
-  visible: { 
-    opacity: 1, 
-    scale: 1, 
-    y: 0, 
-    transition: { 
-      type: "spring", 
-      damping: 25, 
-      stiffness: 300 
-    } 
+/* ---------------- MODAL ---------------- */
+export const modal = {
+  hidden: {
+    opacity: 0,
+    scale: prefersReducedMotion ? 1 : 0.95,
+    y: prefersReducedMotion ? 0 : 20,
   },
-  exit: { 
-    opacity: 0, 
-    scale: 0.95, 
-    y: 10, 
-    transition: snappyTransition 
-  }
+  visible: {
+    opacity: 1,
+    scale: 1,
+    y: 0,
+    transition: springTransition,
+  },
+  exit: {
+    opacity: 0,
+    scale: prefersReducedMotion ? 1 : 0.98,
+    y: prefersReducedMotion ? 0 : 10,
+    transition: snappyTransition,
+  },
+};
+
+/* ---------------- LIST ITEM ---------------- */
+export const listItem = {
+  hidden: { opacity: 0, y: prefersReducedMotion ? 0 : 10 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: snappyTransition,
+  },
+};
+
+/* ---------------- BUTTON TAP ---------------- */
+export const buttonTap = {
+  whileTap: prefersReducedMotion
+    ? {}
+    : { scale: 0.96 },
+};
+
+/* ---------------- HOVER SCALE ---------------- */
+export const hoverScale = {
+  whileHover: prefersReducedMotion
+    ? {}
+    : { scale: 1.03 },
 };

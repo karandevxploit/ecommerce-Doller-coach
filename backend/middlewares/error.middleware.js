@@ -41,6 +41,15 @@ const normalizeError = (err) => {
     code = "DUPLICATE";
   }
 
+  // Zod Validation Error
+  if (err.name === "ZodError" || err.issues) {
+    statusCode = 400;
+    message = err.issues 
+      ? err.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ') 
+      : "Validation failed";
+    code = "VALIDATION_ERROR";
+  }
+
   return { statusCode, message, code };
 };
 

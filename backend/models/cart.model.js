@@ -2,14 +2,6 @@ const mongoose = require("mongoose");
 
 /**
  * ENTERPRISE CART SCHEMA
- *
- * Features:
- * - Variant uniqueness enforcement
- * - Price snapshot (prevents pricing bugs)
- * - Optimized indexing
- * - Cart size protection
- * - Expiry support
- * - Atomic-safe structure
  */
 
 const MAX_CART_ITEMS = 50;
@@ -21,41 +13,27 @@ const cartItemSchema = new mongoose.Schema(
       ref: "Product",
       required: true,
     },
-
     quantity: {
       type: Number,
       required: true,
       min: 1,
-      max: 20, // prevent abuse
+      max: 20, 
       default: 1,
     },
-
     size: { type: String, default: "", trim: true },
     topSize: { type: String, default: "", trim: true },
     bottomSize: { type: String, default: "", trim: true },
     color: { type: String, default: "", trim: true },
-
     variantIdx: { type: Number, default: null },
-
-    /**
-     * UNIQUE VARIANT KEY (CRITICAL)
-     * Used to prevent duplicate items
-     */
     variantKey: {
       type: String,
       required: true,
-      index: true,
     },
-
-    /**
-     * PRICE SNAPSHOT (CRITICAL)
-     */
     price: {
       type: Number,
       required: true,
       min: 0,
     },
-
     addedAt: {
       type: Date,
       default: Date.now,
@@ -71,9 +49,7 @@ const cartSchema = new mongoose.Schema(
       ref: "User",
       required: true,
       unique: true,
-      index: true,
     },
-
     items: {
       type: [cartItemSchema],
       validate: {
@@ -83,24 +59,20 @@ const cartSchema = new mongoose.Schema(
         message: `Cart cannot exceed ${MAX_CART_ITEMS} items`,
       },
     },
-
-    /**
-     * Expiry (for cleanup)
-     */
     expiresAt: {
       type: Date,
-      index: { expireAfterSeconds: 0 },
     },
   },
   { timestamps: true }
 );
 
 /**
- * INDEXES
+ * CONSOLIDATED INDEXES
  */
 cartSchema.index({ userId: 1, updatedAt: -1 });
 cartSchema.index({ "items.productId": 1, userId: 1 });
 cartSchema.index({ "items.variantKey": 1 });
+cartSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 /**
  * PRE-VALIDATE: Generate variantKey
@@ -115,9 +87,7 @@ cartItemSchema.pre("validate", function (next) {
       this.color,
       this.variantIdx,
     ];
-
     this.variantKey = keyParts.map(v => v || "").join("|").toLowerCase();
-
     next();
   } catch (err) {
     next(err);
@@ -125,7 +95,7 @@ cartItemSchema.pre("validate", function (next) {
 });
 
 /**
- * STATIC: Add or Update Item (Atomic Safe)
+ * STATIC METHODS
  */
 cartSchema.statics.addOrUpdateItem = async function (userId, item) {
   const variantKey = [
@@ -140,30 +110,18 @@ cartSchema.statics.addOrUpdateItem = async function (userId, item) {
     .toLowerCase();
 
   return this.findOneAndUpdate(
-    {
-      userId,
-      "items.variantKey": variantKey,
-    },
+    { userId, "items.variantKey": variantKey },
     {
       $inc: { "items.$.quantity": item.quantity || 1 },
       $set: { updatedAt: new Date() },
     },
-    {
-      new: true,
-    }
+    { new: true }
   ).then(async (doc) => {
     if (doc) return doc;
-
-    // If not found → push new item
     return this.findOneAndUpdate(
       { userId },
       {
-        $push: {
-          items: {
-            ...item,
-            variantKey,
-          },
-        },
+        $push: { items: { ...item, variantKey } },
         $set: { updatedAt: new Date() },
       },
       { new: true, upsert: true }
@@ -171,9 +129,6 @@ cartSchema.statics.addOrUpdateItem = async function (userId, item) {
   });
 };
 
-/**
- * STATIC: Clear Cart
- */
 cartSchema.statics.clearCart = function (userId) {
   return this.updateOne({ userId }, { $set: { items: [] } });
 };

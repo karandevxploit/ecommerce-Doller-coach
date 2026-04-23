@@ -11,6 +11,10 @@ node_modules
 dist
 dist-ssr
 *.local
+backend/uploads/
+backend/logs/
+backend/scratch/
+frontend/build_error.txt
 
 # Editor directories and files
 .vscode/*

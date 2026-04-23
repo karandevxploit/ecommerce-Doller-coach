@@ -1,19 +1,59 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Doller Coach | Premium eCommerce</title>
-    <!-- Razorpay Checkout -->
-    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-    <!-- Premium Typography -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Inter:wght@400;500;600;700;800;900&display=swap">
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+
+<head>
+  <!-- BASIC -->
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#000000" />
+
+  <!-- TITLE -->
+  <title>Doller Coach | Premium Fashion Store</title>
+
+  <!-- SEO -->
+  <meta name="description"
+    content="Shop premium fashion for men and women. Discover trending styles, best sellers, and exclusive collections." />
+  <meta name="keywords" content="fashion, ecommerce, men clothing, women clothing, online shopping" />
+
+  <!-- OPEN GRAPH -->
+  <meta property="og:title" content="Doller Coach | Premium Fashion Store" />
+  <meta property="og:description" content="Explore premium fashion collections for men and women." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="/favicon.png" />
+
+  <!-- FAVICON -->
+  <link rel="icon" type="image/png" href="/favicon.png" />
+
+  <!-- PERFORMANCE: FONTS -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+  <link rel="preload"
+    href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Inter:wght@400;500;600;700;800;900&display=swap"
+    as="style" />
+
+  <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Inter:wght@400;500;600;700;800;900&display=swap"
+    media="print" onload="this.media='all'" />
+
+  <!-- RAZORPAY (DEFERRED LOAD) -->
+  <script src="https://checkout.razorpay.com/v1/checkout.js" defer></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+
+<body class="antialiased bg-white text-black">
+  <!-- NOSCRIPT -->
+  <noscript>
+    <div style="text-align:center;padding:20px;">
+      JavaScript is required to run this app.
+    </div>
+  </noscript>
+
+  <!-- ROOT -->
+  <div id="root"></div>
+
+  <!-- APP -->
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+
 </html>

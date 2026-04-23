@@ -67,9 +67,15 @@ router.put("/pay", safeHandler(verifyPaymentExternal));
 /**
  * PRODUCT MANAGEMENT
  */
+const { mediaUpload } = require("../middlewares/upload.middleware");
+const productMediaFields = mediaUpload.fields([
+    { name: "image", maxCount: 1 },
+    { name: "video", maxCount: 1 }
+]);
+
 router.get("/products", safeHandler(productController.listProducts));
-router.post("/products", safeHandler(productController.createProduct));
-router.put("/products/:id", validateObjectId, safeHandler(productController.updateProduct));
+router.post("/products", productMediaFields, safeHandler(productController.createProduct));
+router.put("/products/:id", validateObjectId, productMediaFields, safeHandler(productController.updateProduct));
 router.delete("/products/:id", validateObjectId, safeHandler(productController.deleteProduct));
 
 /**
@@ -91,36 +97,12 @@ router.delete("/offers/:id", validateObjectId, safeHandler(offerController.delet
 /**
  * SECURE FILE UPLOAD (DOCX ONLY)
  */
-const multer = require("multer");
+const { docxUpload } = require("../middlewares/upload.middleware");
 const fs = require("fs");
-const path = require("path");
-
-const uploadDir = path.join(__dirname, "../assets/tmp");
-
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const upload = multer({
-    dest: uploadDir,
-    limits: {
-        fileSize: 5 * 1024 * 1024, // 5MB limit
-    },
-    fileFilter: (req, file, cb) => {
-        if (
-            file.mimetype ===
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        ) {
-            cb(null, true);
-        } else {
-            cb(new Error("Only .docx templates are allowed"));
-        }
-    },
-});
 
 router.post(
     "/invoice-template",
-    upload.single("template"),
+    docxUpload.single("template"),
     safeHandler(async (req, res) => {
         try {
             await uploadInvoiceTemplate(req, res);

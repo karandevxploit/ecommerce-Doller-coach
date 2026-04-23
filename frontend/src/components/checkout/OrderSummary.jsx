@@ -1,5 +1,6 @@
 import { ShoppingCart } from "lucide-react";
 import { formatPrice } from "../../utils/format";
+import SafeImage from "../ui/SafeImage";
 
 export default function OrderSummary({
   items = [],
@@ -36,8 +37,8 @@ export default function OrderSummary({
 
               {/* IMAGE */}
               <div className="w-14 h-18 rounded-lg overflow-hidden bg-gray-100 border">
-                <img
-                  src={i.image || "/placeholder.png"}
+                <SafeImage
+                  src={i.image}
                   alt={i.title || "Product"}
                   className="w-full h-full object-cover"
                 />

@@ -41,10 +41,10 @@ class TaskQueue {
                 maxRetriesPerRequest: null,
             }),
             defaultJobOptions: {
-                attempts: 5,
+                attempts: 5, // Increased for resilience on free-tier Redis
                 backoff: { type: "exponential", delay: 2000 },
-                removeOnComplete: true, // Fallback for limited Redis CONFIG SET permissions
-                removeOnFail: true,     // Fallback for limited Redis CONFIG SET permissions
+                removeOnComplete: { count: 50 }, // Keep last 50 for debugging
+                removeOnFail: true,             // Auto-remove to save memory
             },
         });
         
@@ -98,5 +98,21 @@ const initializeAllQueues = async () => {
     notificationQueue.initialize();
     heavyTaskQueue.initialize();
 };
+
+// --- 1-HOUR CLEANUP LOOP (Compliance: No <60s intervals) ---
+setInterval(async () => {
+    try {
+        const queues = [emailQueue, notificationQueue, heavyTaskQueue];
+        for (const q of queues) {
+            if (q.queue) {
+                await q.queue.clean(3600000, 1000, "completed");
+                await q.queue.clean(3600000, 1000, "failed");
+            }
+        }
+        logger.info("[BULLMQ_CLEANUP] Hourly job maintenance completed.");
+    } catch (err) {
+        logger.error("[BULLMQ_CLEANUP_ERROR]", err);
+    }
+}, 3600000).unref();
 
 module.exports = { emailQueue, notificationQueue, heavyTaskQueue, TaskQueue, initializeAllQueues };

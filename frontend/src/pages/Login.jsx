@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
@@ -9,10 +9,9 @@ import {
   EyeOff,
   KeyRound,
 } from "lucide-react";
-import { useAuthStore } from "../store";
 import { motion } from "framer-motion";
 import { api } from "../api/client";
-import { GoogleLogin } from "@react-oauth/google";
+// import { GoogleLogin } from "@react-oauth/google"; // Removed as per manual implementation plan
 
 import { useForm } from "../hooks/useForm";
 import { loginValidator } from "../utils/validation";
@@ -20,6 +19,7 @@ import { useAuthStore, useCartStore, useWishlistStore } from "../store";
 import { resumePendingAction } from "../utils/authActions";
 
 export default function Login() {
+  console.log(">>> [PAGE_HIT] Login Page Loaded");
   const navigate = useNavigate();
   const { login, setSession } = useAuthStore();
   const cartStore = useCartStore();
@@ -45,6 +45,40 @@ export default function Login() {
     const user = useAuthStore.getState().user;
     navigate(user?.role === "admin" ? "/admin/dashboard" : "/");
   };
+
+  /* ---------------- GOOGLE LOGIN ---------------- */
+  useEffect(() => {
+    const initGoogle = () => {
+      if (!window.google) return;
+
+      /* global google */
+      google.accounts.id.initialize({
+        client_id: "536224738397-ht6q3v710gdjb0a9ulr9okjsuv9sh7sg.apps.googleusercontent.com",
+        callback: async (response) => {
+          try {
+            await login({ token: response.credential }, "google");
+            toast.success("Login successful");
+            redirectUser();
+          } catch (err) {
+            toast.error(err?.response?.data?.message || "Google login failed");
+          }
+        },
+      });
+
+      const btn = document.getElementById("googleBtnPage");
+      if (btn) {
+        google.accounts.id.renderButton(btn, { 
+          theme: "outline", 
+          size: "large", 
+          width: "320" 
+        });
+      }
+    };
+
+    // Small delay to ensure script is ready
+    const timer = setTimeout(initGoogle, 500);
+    return () => clearTimeout(timer);
+  }, []); // Empty dependency to prevent re-initialization warnings
 
   /* ---------------- EMAIL LOGIN ---------------- */
   const handleEmailLogin = async (data) => {
@@ -261,23 +295,8 @@ export default function Login() {
           </div>
 
           <div className="flex justify-center">
-            <GoogleLogin
-              onSuccess={async (res) => {
-                try {
-                  await login(
-                    { credential: res.credential },
-                    "google"
-                  );
-                  toast.success("Login successful");
-                  redirectUser();
-                } catch {
-                  toast.error("Google login failed");
-                }
-              }}
-              onError={() =>
-                toast.error("Google login failed")
-              }
-            />
+            {/* MANUAL GOOGLE BUTTON CONTAINER */}
+            <div id="googleBtnPage"></div>
           </div>
         </div>
 

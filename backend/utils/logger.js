@@ -1,35 +1,33 @@
-const winston = require("winston");
-require("winston-daily-rotate-file");
+const pino = require("pino");
+const chalk = require("chalk");
+const env = require("../config/env");
 
-const { combine, timestamp, printf, colorize, json } = winston.format;
+const isDev = env.NODE_ENV === "development";
 
-const myFormat = printf(({ level, message, timestamp, ...metadata }) => {
-  let msg = `${timestamp} [${level}]: ${message}`;
-  if (Object.keys(metadata).length > 0) {
-    msg += ` ${JSON.stringify(metadata)}`;
-  }
-  return msg;
+const logger = pino({
+  level: isDev ? "debug" : "info",
+  transport: isDev ? {
+    target: "pino-pretty",
+    options: {
+      colorize: true,
+      ignore: "pid,hostname",
+      translateTime: "HH:MM:ss Z",
+    },
+  } : undefined,
+  formatters: {
+    level: (label) => {
+      return { level: label.toUpperCase() };
+    },
+  },
+  timestamp: pino.stdTimeFunctions.isoTime,
 });
 
-const logger = winston.createLogger({
-  level: process.env.LOG_LEVEL || "info",
-  format: combine(timestamp({ format: "YYYY-MM-DD HH:mm:ss" }), json()),
-  transports: [
-    new winston.transports.Console({
-      format: combine(colorize(), myFormat),
-    }),
-    new winston.transports.File({ 
-      filename: "logs/error.log", 
-      level: "error",
-      maxsize: 5242880, // 5MB
-      maxFiles: 5,
-    }),
-    new winston.transports.File({ 
-      filename: "logs/combined.log",
-      maxsize: 5242880, // 5MB
-      maxFiles: 5,
-    }),
-  ],
-});
-
-module.exports = logger;
+module.exports = {
+  logger,
+  chalk,
+  // Helper for consistent logging
+  info: (msg, obj) => logger.info(obj, msg),
+  error: (msg, obj) => logger.error(obj, msg),
+  warn: (msg, obj) => logger.warn(obj, msg),
+  fatal: (msg, obj) => logger.fatal(obj, msg),
+};

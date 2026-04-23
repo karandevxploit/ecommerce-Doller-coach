@@ -8,12 +8,12 @@ const { notifyAdmins } = require("../services/notification.service");
 const { sendNewProductEmail } = require("../utils/sendEmail");
 
 const { logger } = require("../utils/logger");
-const { safeCall } = require("../config/redis");
+const cache = require("../services/cache.service");
 
 // ===============================
 // SAFE HELPERS
 // ===============================
-const safeParseInt = (val, fallback, min = 1, max = 50) => {
+const safeParseInt = (val, fallback, min = 1, max = 20) => {
   const n = parseInt(val);
   if (isNaN(n) || n < min) return fallback;
   return Math.min(n, max);
@@ -39,84 +39,66 @@ exports.listProducts = asyncHandler(async (req, res) => {
     page,
   } = req.query;
 
-  const limitNum = safeParseInt(limit, 10);
+  // 1. STRICT LIMIT (Compliance: Max 20)
+  const limitNum = safeParseInt(limit, 20, 1, 20); // Default 20
   const pageNum = safeParseInt(page, 1, 1, 1000);
 
   const cacheKey = `products:${JSON.stringify(req.query)}`;
 
-  // 🔥 CACHE FIRST (SAFE)
+  // 2. HYBRID CACHE (DEDUPLICATED)
   if (!q) {
-    const cached = await safeCall((r) => r.get(cacheKey));
-    if (cached) {
-      const { result, total } = JSON.parse(cached);
-      return ok(res, result, "Products (cache)", 200, {
+    return cache.getOrSet(cacheKey, async () => {
+      // FILTER
+      const filter = { isDeleted: { $ne: true } };
+
+      if (category && category !== "All") filter.category = category.toUpperCase();
+      if (subcategory && subcategory !== "All") filter.subcategory = subcategory;
+      if (productType && productType !== "All") filter.productType = productType;
+      if (type && type !== "All") filter.type = type.toUpperCase();
+      if (featured === "true") filter.featured = true;
+      if (trending === "true") filter.trending = true;
+
+      if (sizes) {
+        const arr = sizes.split(",").map((s) => s.trim());
+        if (arr.length) filter.sizes = { $in: arr };
+      }
+
+      const selectFields = "name price images stock category brand createdAt status isTrending featured";
+
+      // 3. PARALLEL OPTIMIZATION (No countDocuments for speed/memory)
+      const [data, total] = await Promise.all([
+        Product.find(filter)
+          .select(selectFields)
+          .sort({ createdAt: -1 })
+          .skip((pageNum - 1) * limitNum)
+          .limit(limitNum)
+          .lean()
+          .maxTimeMS(3000),
+        Product.estimatedDocumentCount().maxTimeMS(1000) // Fast approximation
+      ]);
+
+      const result = data.map((p) => ({
+        ...p,
+        id: p._id,
+        title: p.name,
+        image: (Array.isArray(p.images) && p.images[0]) || p.image || "/placeholder.png",
+        _id: undefined,
+      }));
+
+      return { result, total };
+    }, 120).then(({ result, total }) => {
+      res.status(200).json({
+        success: true,
+        products: result,
         total,
-        page: pageNum,
-        limit: limitNum,
+        page: Number(pageNum),
+        limit: Number(limitNum),
         totalPages: Math.ceil(total / limitNum)
       });
-    }
-  }
-
-  // FILTER
-  const filter = { isDeleted: { $ne: true } };
-
-  if (category && category !== "All") filter.category = category.toUpperCase();
-  if (subcategory && subcategory !== "All") filter.subcategory = subcategory;
-  if (productType && productType !== "All") filter.productType = productType;
-  if (type && type !== "All") filter.type = type.toUpperCase();
-  if (featured === "true") filter.featured = true;
-  if (trending === "true") filter.trending = true;
-
-  if (sizes) {
-    const arr = sizes.split(",").map((s) => s.trim());
-    if (arr.length) filter.sizes = { $in: arr };
-  }
-
-  // SEARCH (LIMITED SAFE)
-  if (q) {
-    const search = escapeRegex(q.slice(0, 50));
-    filter.$or = [
-      { name: { $regex: search, $options: "i" } },
-      { description: { $regex: search, $options: "i" } },
-    ];
-  }
-
-  try {
-    const selectFields = "name price images stock category brand createdAt status isTrending featured";
-
-    const total = await Product.countDocuments(filter);
-    const data = await Product.find(filter)
-      .select(selectFields)
-      .sort({ createdAt: -1 })
-      .skip((pageNum - 1) * limitNum)
-      .limit(limitNum)
-      .lean()
-      .maxTimeMS(5000);
-
-    const result = data.map((p) => ({
-      ...p,
-      id: p._id,
-      title: p.name, // Maintain UI compatibility
-      _id: undefined,
-    }));
-
-    // 🔥 CACHE WRITE (ASYNC SAFE)
-    if (!q) {
-      safeCall((r) =>
-        r.set(cacheKey, JSON.stringify({ result, total }), "EX", 300)
-      );
-    }
-
-    return ok(res, result, "Products fetched", 200, {
-      total,
-      page: pageNum,
-      limit: limitNum,
-      totalPages: Math.ceil(total / limitNum)
+    }).catch(err => {
+      logger.error("[PRODUCT_LIST_ERROR]", err);
+      return ok(res, [], "Fallback", 200, { total: 0, page: 1, limit: 20, totalPages: 0 });
     });
-  } catch (err) {
-    logger.error("[PRODUCT_LIST_ERROR]", err);
-    return ok(res, [], "Fallback result", 200, { total: 0, page: 1, limit: 10, totalPages: 0 });
   }
 });
 
@@ -138,26 +120,37 @@ const sanitizeProductData = (payload) => {
   
   const sanitized = { ...payload };
 
+  // Handle common string-to-number conversions for multipart/form-data
+  if (typeof payload.price === 'string') sanitized.price = Number(payload.price) || 0;
+  if (typeof payload.originalPrice === 'string') sanitized.originalPrice = Number(payload.originalPrice) || 0;
+  if (typeof payload.stock === 'string') sanitized.stock = Number(payload.stock) || 0;
+  if (typeof payload.featured === 'string') sanitized.featured = payload.featured === 'true';
+  if (typeof payload.isTrending === 'string') sanitized.isTrending = payload.isTrending === 'true';
+
   if (payload.title || payload.name) {
     sanitized.name = (payload.name || payload.title).trim();
   }
 
-  if (payload.price !== undefined) {
-    sanitized.price = Number(payload.price) || 0;
+  // Handle nested objects if they come as JSON strings from multipart
+  if (typeof payload.video === 'string') {
+    try { sanitized.video = JSON.parse(payload.video); } catch(e) {}
+  }
+  if (typeof payload.variants === 'string') {
+    try { sanitized.variants = JSON.parse(payload.variants); } catch(e) {}
+  }
+  if (typeof payload.badge === 'string') {
+    try { sanitized.badge = JSON.parse(payload.badge); } catch(e) {}
+  }
+  if (typeof payload.offer === 'string') {
+    try { sanitized.offer = JSON.parse(payload.offer); } catch(e) {}
+  }
+  if (typeof payload.controls === 'string') {
+    try { sanitized.controls = JSON.parse(payload.controls); } catch(e) {}
   }
 
-  if (payload.originalPrice !== undefined) {
-    sanitized.originalPrice = Number(payload.originalPrice) || sanitized.price || 0;
-  }
-
-  if (payload.isTrending === undefined && payload.trending !== undefined) {
-    sanitized.isTrending = !!payload.trending;
-  }
-
-  // Only transform variants if they are explicitly provided
-  if (Array.isArray(payload.variants)) {
+  if (Array.isArray(sanitized.variants)) {
     const basePrice = sanitized.price || 0;
-    sanitized.variants = payload.variants.map((v) => ({
+    sanitized.variants = sanitized.variants.map((v) => ({
       ...v,
       sku: v.sku || `${(sanitized.name || "PRD").substring(0, 3).toUpperCase()}-${(v.color || 'XX').substring(0, 2).toUpperCase()}-${v.size || 'S'}-${Date.now()}`,
       color: String(v.color || "Common"),
@@ -181,10 +174,32 @@ exports.createProduct = asyncHandler(async (req, res) => {
   }
 
   try {
-    const product = new Product(req.body);
+    const sanitized = sanitizeProductData(req.body);
+    const { streamUpload } = require("./upload.controller");
+
+    // Handle Image Upload (Optional)
+    if (req.files && req.files.image && req.files.image[0]) {
+      const result = await streamUpload(req.files.image[0].buffer, { folder: "products/images" });
+      sanitized.primaryImage = result.secure_url;
+    }
+
+    // Handle Video Upload (Optional)
+    if (req.files && req.files.video && req.files.video[0]) {
+      const result = await streamUpload(req.files.video[0].buffer, { 
+        folder: "products/videos",
+        resource_type: "video"
+      });
+      sanitized.video = {
+        url: result.secure_url,
+        publicId: result.public_id,
+        duration: result.duration || 0,
+        size: result.bytes || req.files.video[0].size
+      };
+    }
+
+    const product = new Product(sanitized);
     await product.save();
 
-    // ASYNC NOTIFICATIONS & CACHE
     safeCall((r) => r.flushdb());
     setImmediate(() => {
         notifyAdmins({ title: "New Product", body: product.name }).catch(() => {});
@@ -193,21 +208,8 @@ exports.createProduct = asyncHandler(async (req, res) => {
 
     return ok(res, product, "Product Created Successfully", 201);
   } catch (err) {
-    logger.error("PRODUCT_CREATE_CRITICAL_FAIL", { 
-        error: err.message, 
-        body: req.body 
-    });
-
-    if (err.name === "ValidationError") {
-      const messages = Object.values(err.errors).map(e => e.message);
-      return fail(res, "Validation: " + messages.join(", "), 400);
-    }
-    
-    if (err.code === 11000) {
-      return fail(res, `Conflict: A resource with this value already exists.`, 409);
-    }
-
-    return fail(res, "Database error: " + err.message, 500);
+    logger.error("PRODUCT_CREATE_CRITICAL_FAIL", { error: err.message });
+    return fail(res, "Creation failed: " + err.message, 500);
   }
 });
 
@@ -219,18 +221,84 @@ exports.updateProduct = asyncHandler(async (req, res) => {
     return fail(res, "Unauthorized", 403);
   }
 
-  const sanitized = sanitizeProductData(req.body);
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) return fail(res, "Not found", 404);
 
-  const product = await productRepository.updateById(
-    req.params.id,
-    sanitized
-  );
+    const sanitized = sanitizeProductData(req.body);
+    const { streamUpload } = require("./upload.controller");
+    const cloudinary = require("../config/cloudinary").getCloudinary();
 
-  if (!product) return fail(res, "Not found", 404);
+    // Handle Image Update
+    if (req.files && req.files.image && req.files.image[0]) {
+      const result = await streamUpload(req.files.image[0].buffer, { folder: "products/images" });
+      sanitized.primaryImage = result.secure_url;
+      // Note: We don't delete old image here unless we have its publicId, 
+      // but images array usually handles this differently in this system.
+    }
+
+    // Handle Video Update
+    if (req.files && req.files.video && req.files.video[0]) {
+      // 1. Delete old video from Cloudinary
+      if (product.video && product.video.publicId) {
+        await cloudinary.uploader.destroy(product.video.publicId, { resource_type: "video" }).catch(e => {
+          logger.warn("Old video deletion failed during update", { publicId: product.video.publicId });
+        });
+      }
+
+      // 2. Upload new video
+      const result = await streamUpload(req.files.video[0].buffer, { 
+        folder: "products/videos",
+        resource_type: "video"
+      });
+      
+      sanitized.video = {
+        url: result.secure_url,
+        publicId: result.public_id,
+        duration: result.duration || 0,
+        size: result.bytes || req.files.video[0].size
+      };
+    }
+
+    // Apply updates
+    Object.assign(product, sanitized);
+    await product.save();
+
+    safeCall((r) => r.flushdb());
+
+    return ok(res, product, "Updated");
+  } catch (err) {
+    logger.error("PRODUCT_UPDATE_CRITICAL_FAIL", { error: err.message });
+    return fail(res, "Update failed: " + err.message, 500);
+  }
+});
+
+// ===============================
+// DELETE PRODUCT VIDEO
+// ===============================
+exports.deleteVideo = asyncHandler(async (req, res) => {
+  if (req.user.role !== "admin") {
+    return fail(res, "Unauthorized", 403);
+  }
+
+  const product = await Product.findById(req.params.id);
+  if (!product) return fail(res, "Product not found", 404);
+
+  if (product.video && product.video.publicId) {
+    try {
+      const cloudinary = require("../config/cloudinary").getCloudinary();
+      await cloudinary.uploader.destroy(product.video.publicId, { resource_type: "video" });
+    } catch (err) {
+      logger.error("CLOUDINARY_VIDEO_DELETE_FAILED", { error: err.message, publicId: product.video.publicId });
+    }
+  }
+
+  product.video = { url: null, publicId: null };
+  await product.save();
 
   safeCall((r) => r.flushdb());
 
-  return ok(res, product, "Updated");
+  return ok(res, product, "Video deleted successfully");
 });
 
 // ===============================

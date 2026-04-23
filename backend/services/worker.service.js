@@ -37,6 +37,9 @@ const emailWorker = new Worker("email-queue", async (job) => {
   }
 }, { 
     connection,
+    concurrency: 1,
+    removeOnComplete: true,
+    removeOnFail: true,
     settings: {
         backoffStrategies: {
             exponential: (delay) => (attemptsMade) => Math.pow(2, attemptsMade) * delay
@@ -64,7 +67,12 @@ const heavyWorker = new Worker("heavy-task-queue", async (job) => {
       throw err;
     }
   }
-}, { connection });
+}, { 
+    connection,
+    concurrency: 1, // Strict single-core limit for memory stability
+    removeOnComplete: true, // Auto-remove to save Redis & worker memory
+    removeOnFail: true,
+});
 
 // 4. Global Logging
 [emailWorker, heavyWorker].forEach(worker => {

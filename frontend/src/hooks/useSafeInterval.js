@@ -1,60 +1,95 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 
 /**
- * useSafeInterval Hook
- * A production-grade replacement for setInterval that:
- * 1. Automatically clears on unmount
- * 2. Pauses execution when the browser tab is hidden (Page Visibility API)
- * 3. Prevents overlapping executions if the callback is async
+ * useSafeInterval
+ * Reliable interval hook with:
+ * - Auto cleanup
+ * - Visibility pause/resume
+ * - Async-safe execution
+ * - Manual controls
+ * - Optional immediate run
  */
-export const useSafeInterval = (callback, delay) => {
+export const useSafeInterval = (
+  callback,
+  delay,
+  { immediate = false } = {}
+) => {
   const savedCallback = useRef(callback);
-  const intervalId = useRef(null);
+  const intervalRef = useRef(null);
+  const isRunning = useRef(false);
   const isExecuting = useRef(false);
 
-  // Remember the latest callback
+  /* ---------------- STORE LATEST CALLBACK ---------------- */
   useEffect(() => {
     savedCallback.current = callback;
   }, [callback]);
 
+  /* ---------------- EXECUTION ---------------- */
+  const tick = useCallback(async () => {
+    if (!savedCallback.current || isExecuting.current) return;
+
+    isExecuting.current = true;
+
+    try {
+      await savedCallback.current();
+    } catch (err) {
+      console.error("[useSafeInterval] Execution error:", err);
+    } finally {
+      isExecuting.current = false;
+    }
+  }, []);
+
+  /* ---------------- START ---------------- */
+  const start = useCallback(() => {
+    if (intervalRef.current || delay === null) return;
+
+    isRunning.current = true;
+
+    intervalRef.current = setInterval(tick, delay);
+  }, [delay, tick]);
+
+  /* ---------------- STOP ---------------- */
+  const stop = useCallback(() => {
+    isRunning.current = false;
+
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  }, []);
+
+  /* ---------------- VISIBILITY HANDLING ---------------- */
+  useEffect(() => {
+    if (typeof document === "undefined") return; // SSR safe
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stop();
+      } else if (!intervalRef.current && isRunning.current) {
+        start();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [start, stop]);
+
+  /* ---------------- INIT ---------------- */
   useEffect(() => {
     if (delay === null) return;
 
-    const tick = async () => {
-      // 1. Skip if already executing (Prevents queue backup)
-      if (savedCallback.current && !isExecuting.current) {
-        isExecuting.current = true;
-        try {
-          await savedCallback.current();
-        } finally {
-          isExecuting.current = false;
-        }
-      }
-    };
+    if (immediate) tick();
+    start();
 
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        if (intervalId.current) {
-          clearInterval(intervalId.current);
-          intervalId.current = null;
-        }
-      } else {
-        if (!intervalId.current) {
-          intervalId.current = setInterval(tick, delay);
-        }
-      }
-    };
+    return () => stop();
+  }, [delay, immediate, start, stop, tick]);
 
-    // Initial setup
-    if (!document.hidden) {
-      intervalId.current = setInterval(tick, delay);
-    }
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      if (intervalId.current) clearInterval(intervalId.current);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [delay]);
+  return {
+    start,
+    stop,
+    isRunning: isRunning.current
+  };
 };

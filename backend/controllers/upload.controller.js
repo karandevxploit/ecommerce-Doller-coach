@@ -6,7 +6,8 @@ const path = require("path");
 // ===============================
 // CONFIG
 // ===============================
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
+const MAX_VIDEO_SIZE = 20 * 1024 * 1024; // 20MB
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const ALLOWED_VIDEO_TYPES = ["video/mp4", "video/webm"];
 
@@ -33,8 +34,11 @@ const safeDelete = (filePath) => {
 const validateFile = (file, allowedTypes) => {
   if (!file) return "No file uploaded";
 
-  if (file.size > MAX_FILE_SIZE) {
-    return "File too large (max 10MB)";
+  const isVideo = file.mimetype.startsWith("video/");
+  const maxSize = isVideo ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
+
+  if (file.size > maxSize) {
+    return `File too large (max ${maxSize / (1024 * 1024)}MB)`;
   }
 
   if (!allowedTypes.includes(file.mimetype)) {
@@ -65,13 +69,13 @@ const streamUpload = (buffer, options = {}) => {
   });
 };
 
+exports.streamUpload = streamUpload;
+
 // ===============================
 // SINGLE IMAGE UPLOAD
 // ===============================
 exports.uploadSingle = async (req, res) => {
   try {
-    console.log("[DEBUG] SINGLE FILE:", req.file);
-    console.log("[DEBUG] BODY:", req.body);
     const error = validateFile(req.file, ALLOWED_IMAGE_TYPES);
     if (error) return fail(res, error, 400);
 
@@ -106,9 +110,6 @@ exports.uploadMultiple = async (req, res) => {
     if (!req.files || !req.files.length) {
       return res.status(400).json({ success: false, message: "No files uploaded" });
     }
-
-    console.log("[DEBUG] MULTIPLE FILES:", req.files.length);
-    console.log("[DEBUG] BODY:", req.body);
 
     const uploads = req.files.map(async (file) => {
       const error = validateFile(file, ALLOWED_IMAGE_TYPES);
@@ -147,13 +148,20 @@ exports.uploadVideo = async (req, res) => {
     const result = await streamUpload(req.file.buffer, {
       folder: "products/videos",
       resource_type: "video",
+      eager: [
+        { format: "mp4", video_codec: "h264" },
+        { format: "webm", video_codec: "vp9" }
+      ],
+      eager_async: true
     });
 
     log("SUCCESS", "Video uploaded", result.secure_url);
 
     return ok(res, {
-      videoUrl: result.secure_url,
-      public_id: result.public_id,
+      url: result.secure_url,
+      publicId: result.public_id,
+      duration: result.duration || 0,
+      size: result.bytes || req.file.size,
     });
 
   } catch (err) {

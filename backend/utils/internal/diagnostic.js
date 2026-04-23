@@ -1,5 +1,5 @@
-const mongoose = require('mongoose');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
 const OrderSchema = new mongoose.Schema({}, { strict: false, timestamps: true });
 const Order = mongoose.model('DiagnosticOrder', OrderSchema, 'orders');

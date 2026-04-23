@@ -1,6 +1,5 @@
 const router = require("express").Router();
 const { safeHandler } = require("../middlewares/error.middleware");
-const { verifyRecaptcha } = require("../middlewares/recaptcha.middleware");
 const { authLimiter } = require("../middlewares/rateLimiter.v2");
 const validate = require("../middlewares/validate.middleware");
 const mongoose = require("mongoose");
@@ -56,7 +55,7 @@ const validateObjectId = (req, res, next) => {
 /**
  * AUTH ROUTES (HARDENED)
  */
-router.post("/login", authLimiter, verifyRecaptcha("login"), validate(loginSchema), safeHandler(login));
+router.post("/login", authLimiter, validate(loginSchema), safeHandler(login));
 router.post("/logout", safeHandler(logout));
 router.post("/refresh-token", authLimiter, safeHandler(refreshToken));
 
@@ -75,7 +74,7 @@ router.get("/admin-exists", authLimiter, safeHandler(adminExists));
 /**
  * USER REGISTER
  */
-router.post("/register", authLimiter, verifyRecaptcha("register"), validate(registerSchema), safeHandler(register));
+router.post("/register", authLimiter, validate(registerSchema), safeHandler(register));
 
 /**
  * EMAIL TEST (ADMIN ONLY)
@@ -86,15 +85,15 @@ router.get("/test-order-email", isAuthenticated, isAdmin, safeHandler(testOrderE
 /**
  * OTP FLOW (HARDENED)
  */
-router.post("/send-otp", authLimiter, verifyRecaptcha("default"), validate(sendOtpSchema), safeHandler(sendOtp));
-router.post("/request-login-otp", authLimiter, verifyRecaptcha("default"), safeHandler(requestLoginOtp));
-router.post("/verify-otp", authLimiter, verifyRecaptcha("default"), validate(verifyOtpSchema), safeHandler(verifyOtp));
-router.post("/reset-password", authLimiter, verifyRecaptcha("default"), validate(resetPasswordSchema), safeHandler(resetPassword));
+router.post("/send-otp", authLimiter, validate(sendOtpSchema), safeHandler(sendOtp));
+router.post("/request-login-otp", authLimiter, safeHandler(requestLoginOtp));
+router.post("/verify-otp", authLimiter, validate(verifyOtpSchema), safeHandler(verifyOtp));
+router.post("/reset-password", authLimiter, validate(resetPasswordSchema), safeHandler(resetPassword));
 
 /**
  * GOOGLE AUTH
  */
-router.post("/google", authLimiter, verifyRecaptcha("default"), safeHandler(google));
+router.post("/google", authLimiter, safeHandler(google));
 
 // ❌ REMOVED google-debug (should not exist in production)
 
@@ -102,6 +101,7 @@ router.post("/google", authLimiter, verifyRecaptcha("default"), safeHandler(goog
  * PROFILE + NOTIFICATIONS
  */
 router.get("/profile", isAuthenticated, safeHandler(profile));
+router.get("/me", isAuthenticated, (req, res) => res.json({ success: true, user: req.user }));
 router.post("/fcm-token", isAuthenticated, safeHandler(saveFcmToken));
 router.get("/notifications", isAuthenticated, safeHandler(notificationController.myNotifications));
 

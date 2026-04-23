@@ -10,7 +10,7 @@ const { ok, fail } = require("../utils/apiResponse");
 const { logger } = require("../utils/logger");
 const { createOrderSchema } = require("../validations/order.validation");
 
-const { safeCall } = require("../config/redis");
+const redis = require("../config/redis");
 
 // ===============================
 // CREATE ORDER (FULL SAFE)
@@ -25,7 +25,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
   try {
     // 1. IDEMPOTENCY CHECK
     const key = `order:${req.user._id}:${JSON.stringify(products)}`;
-    const exists = await safeCall(r => r.get(key));
+    const exists = await redis.get(key);
     if (exists) {
       await session.abortTransaction();
       return fail(res, "Duplicate order request", 409);
@@ -63,7 +63,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     }
 
     // 5. SAVE IDEMPOTENCY KEY
-    safeCall(r => r.set(key, "1", "EX", 60));
+    redis.set(key, "1", "EX", 60);
 
     await session.commitTransaction();
     session.endSession();
@@ -138,17 +138,17 @@ exports.verifyPayment = asyncHandler(async (req, res) => {
 exports.getMyOrders = asyncHandler(async (req, res) => {
   const userId = req.user._id;
 
-  const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+  const limit = Math.min(parseInt(req.query.limit) || 20, 20);
   const page = Math.max(parseInt(req.query.page) || 1, 1);
 
-  const data = await Order.find({ userId })
+  const orders = await Order.find({ userId })
     .select("total status paymentStatus createdAt")
     .sort({ createdAt: -1 })
     .skip((page - 1) * limit)
     .limit(limit)
     .lean();
 
-  return ok(res, data);
+  return res.json({ success: true, orders });
 });
 
 // ===============================
@@ -156,7 +156,7 @@ exports.getMyOrders = asyncHandler(async (req, res) => {
 // ===============================
 exports.getOrders = asyncHandler(async (req, res) => {
   const page = Math.max(parseInt(req.query.page) || 1, 1);
-  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  const limit = Math.min(parseInt(req.query.limit) || 10, 20);
   const status = req.query.status;
 
   const filter = {};
@@ -205,7 +205,12 @@ exports.updatePaymentStatus = asyncHandler(async (req, res) => {
 // ===============================
 exports.exportOrders = asyncHandler(async (req, res) => {
   // Simple CSV export logic stub or full implementation
-  const orders = await Order.find().sort({ createdAt: -1 }).limit(1000).lean();
+  // Optimized CSV export with projection
+  const orders = await Order.find()
+    .select("userId total status paymentStatus createdAt")
+    .sort({ createdAt: -1 })
+    .limit(500)
+    .lean();
   
   if (!orders.length) return fail(res, "No orders to export", 404);
 

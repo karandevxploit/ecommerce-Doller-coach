@@ -4,13 +4,6 @@ const mongoosePaginate = require("mongoose-paginate-v2");
 
 /**
  * ENTERPRISE USER SYSTEM
- *
- * Features:
- * - Strong uniqueness (case-insensitive email)
- * - Account lockout enforcement
- * - Multi-device support
- * - Security metadata
- * - Soft delete
  */
 
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -19,41 +12,31 @@ const LOCK_TIME = 2 * 60 * 60 * 1000; // 2 hours
 const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, maxlength: 100 },
-
     email: {
       type: String,
       lowercase: true,
       trim: true,
-      index: true,
     },
-
     emailLower: {
       type: String,
       unique: true,
       sparse: true,
-      index: true,
     },
-
     phone: {
       type: String,
       trim: true,
-      index: true,
     },
-
     phoneNormalized: {
       type: String,
       unique: true,
       sparse: true,
-      index: true,
     },
-
     provider: {
       type: String,
       enum: ["email", "google", "github"],
       default: "email",
       required: true,
     },
-
     password: {
       type: String,
       select: false,
@@ -61,35 +44,17 @@ const userSchema = new mongoose.Schema(
         return this.isNew && this.provider === "email";
       },
     },
-
     role: {
       type: String,
       enum: ["user", "admin"],
       default: "user",
-      index: true,
     },
-
-    /**
-     * VERIFICATION
-     */
-    emailVerified: { type: Boolean, default: false, index: true },
-    phoneVerified: { type: Boolean, default: false, index: true },
-    isVerified: { type: Boolean, default: false, index: true },
-
-    /**
-     * OAUTH
-     */
+    emailVerified: { type: Boolean, default: false },
+    phoneVerified: { type: Boolean, default: false },
+    isVerified: { type: Boolean, default: false },
     googleId: { type: String, unique: true, sparse: true },
-
-    /**
-     * ADDRESSES
-     */
     addresses: [{ type: mongoose.Schema.Types.ObjectId, ref: "Address" }],
     defaultAddressId: { type: mongoose.Schema.Types.ObjectId, ref: "Address" },
-
-    /**
-     * DEVICE MANAGEMENT (MULTI-DEVICE)
-     */
     devices: [
       {
         fcmToken: String,
@@ -97,31 +62,24 @@ const userSchema = new mongoose.Schema(
         lastUsed: { type: Date, default: Date.now },
       },
     ],
-
     avatar: { type: String, default: "" },
-
-    /**
-     * SECURITY
-     */
     loginAttempts: { type: Number, default: 0 },
     lockUntil: { type: Date },
     tokenVersion: { type: Number, default: 0 },
-
     lastLoginAt: { type: Date },
     lastLoginIP: { type: String },
-
-    /**
-     * SOFT DELETE
-     */
-    isDeleted: { type: Boolean, default: false, index: true },
+    isDeleted: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
 
 /**
- * INDEXES
+ * CONSOLIDATED INDEXES
  */
-// Explicit indexes removed in favor of field-level definitions as requested
+userSchema.index({ email: 1 });
+userSchema.index({ phone: 1 });
+userSchema.index({ role: 1 });
+userSchema.index({ isDeleted: 1 });
 
 /**
  * PASSWORD COMPARE
@@ -143,27 +101,19 @@ userSchema.methods.isLocked = function () {
  */
 userSchema.pre("save", async function (next) {
   try {
-    // Normalize email
     if (this.email) {
       this.emailLower = this.email.toLowerCase();
     }
-
-    // Normalize phone
     if (this.phone) {
       this.phoneNormalized = this.phone.replace(/[^0-9+]/g, "");
     }
-
-    // Normalize role
     if (this.role) {
       this.role = String(this.role).toLowerCase();
     }
-
-    // Hash password
     if (this.isModified("password")) {
       const salt = await bcrypt.genSalt(12);
       this.password = await bcrypt.hash(this.password, salt);
     }
-
     next();
   } catch (err) {
     next(err);
@@ -175,13 +125,10 @@ userSchema.pre("save", async function (next) {
  */
 userSchema.statics.handleFailedLogin = async function (user) {
   if (!user) return;
-
   const updates = { $inc: { loginAttempts: 1 } };
-
   if (user.loginAttempts + 1 >= MAX_LOGIN_ATTEMPTS) {
     updates.$set = { lockUntil: Date.now() + LOCK_TIME };
   }
-
   return this.updateOne({ _id: user._id }, updates);
 };
 

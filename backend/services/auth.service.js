@@ -4,7 +4,7 @@ const env = require("../config/env");
 const RefreshToken = require("../models/refreshToken.model");
 
 class AuthService {
-  static ACCESS_EXPIRY = "15m";
+  static ACCESS_EXPIRY = "7d";
   static REFRESH_EXPIRY = "7d";
 
   // =========================

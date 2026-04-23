@@ -31,7 +31,7 @@ module.exports = {
       
       // ADVANCED CONFIGURATION
       node_args: [
-        "--max-old-space-size=1024" // Limit old space heap size
+        "--max-old-space-size=512" // Limit old space heap size for stability
       ],
       
       // MONITORING

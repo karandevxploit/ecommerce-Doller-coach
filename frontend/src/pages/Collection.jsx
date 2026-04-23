@@ -66,7 +66,7 @@ export default function Collection() {
     queryFn: async ({ pageParam = 1 }) => {
       const query = new URLSearchParams(searchParams);
       query.set("page", pageParam);
-      query.set("limit", "24");
+      query.set("limit", "20"); // Compliance: Cap at 20
 
       if (filters.category) {
         query.set("category", filters.category);
@@ -82,7 +82,7 @@ export default function Collection() {
         products: (raw.data || []).map(mapProduct),
         total: raw.total || 0,
         nextPage: pageParam + 1,
-        hasMore: pageParam < (raw.pages || 1),
+        hasMore: pageParam < (raw.totalPages || 1), // Using totalPages from meta
       };
     },
     getNextPageParam: (last) =>

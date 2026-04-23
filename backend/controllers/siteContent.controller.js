@@ -2,7 +2,7 @@ const SiteContent = require("../models/siteContent.model");
 const asyncHandler = require("express-async-handler");
 
 const { ok, fail } = require("../utils/apiResponse");
-const { safeCall } = require("../config/redis");
+const cache = require("../services/cache.service");
 const { logger } = require("../utils/logger");
 
 const CACHE_KEY = "site:content";
@@ -23,16 +23,10 @@ const DEFAULT_CONTENT = Object.freeze({
 });
 
 // ===============================
-// GET SITE CONTENT (CACHED)
+// GET SITE CONTENT (HYBRID CACHED)
 // ===============================
 exports.getSiteContent = asyncHandler(async (req, res) => {
-  try {
-    // 1. CACHE FIRST
-    const cached = await safeCall((r) => r.get(CACHE_KEY));
-    if (cached) {
-      return ok(res, JSON.parse(cached), "Site content (cache)");
-    }
-
+  return cache.getOrSet(CACHE_KEY, async () => {
     // 2. DB FETCH
     const content = await SiteContent.findOne()
       .sort({ createdAt: -1 })
@@ -59,20 +53,13 @@ exports.getSiteContent = asyncHandler(async (req, res) => {
       })
       .sort((a, b) => (a.order || 0) - (b.order || 0));
 
-    const result = { ...base, heroCarousel: processedCarousel };
-
-    // 4. CACHE SET (NON-BLOCKING)
-    safeCall((r) =>
-      r.set(CACHE_KEY, JSON.stringify(result), "EX", CACHE_TTL)
-    );
-
-    return ok(res, result, "Site content (db)");
-  } catch (err) {
+    return { ...base, heroCarousel: processedCarousel };
+  }, 60).then(result => {
+    return ok(res, result, "Site content fetched");
+  }).catch(err => {
     logger.error("[SITE_CONTENT_GET_ERROR]", err);
-
-    // FAIL SAFE (never break UI)
     return ok(res, DEFAULT_CONTENT, "Fallback content");
-  }
+  });
 });
 
 // ===============================

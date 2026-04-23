@@ -12,7 +12,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import AddressManager from "../components/AddressManager";
+import SmartCheckoutAddress from "../components/checkout/SmartCheckoutAddress";
 import OrderSummary from "../components/checkout/OrderSummary";
 import PaymentMethods from "../components/checkout/PaymentMethods";
 import CouponSection from "../components/checkout/CouponSection";
@@ -199,8 +199,8 @@ export default function Checkout() {
         {/* LEFT */}
         <div className="lg:col-span-7 space-y-6">
           {step === 1 && (
-            <AddressManager
-              onSelect={(a) =>
+            <SmartCheckoutAddress
+              onAddressComplete={(a) =>
                 setValues({ ...values, selectedAddress: a })
               }
             />
@@ -233,17 +233,20 @@ export default function Checkout() {
 
           {/* ACTION */}
           <button
-            onClick={() =>
-              step < 3 ? setStep(step + 1) : placeOrder()
-            }
+            onClick={() => {
+              if (step === 1 && !isAddressValid(values.selectedAddress)) {
+                return toast.error("Please provide a complete delivery address");
+              }
+              step < 3 ? setStep(step + 1) : placeOrder();
+            }}
             disabled={loading}
-            className="w-full h-12 bg-black text-white rounded-lg"
+            className="w-full h-14 bg-black text-white rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] transition-all hover:bg-slate-800 disabled:opacity-50 shadow-xl shadow-black/20"
           >
             {loading
-              ? "Processing..."
+              ? "Processing Order..."
               : step < 3
-                ? "Continue"
-                : "Place Order"}
+                ? "Continue to Payment"
+                : "Complete Purchase"}
           </button>
         </div>
 

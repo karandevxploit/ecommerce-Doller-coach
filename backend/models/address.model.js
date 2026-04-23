@@ -2,13 +2,6 @@ const mongoose = require("mongoose");
 
 /**
  * ENTERPRISE ADDRESS SCHEMA
- *
- * Features:
- * - Single default enforcement (DB + logic)
- * - Geo indexing support
- * - Data normalization
- * - Soft delete support
- * - Optimized indexing
  */
 
 const addressSchema = new mongoose.Schema(
@@ -17,77 +10,61 @@ const addressSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
     },
-
     fullName: {
       type: String,
       required: true,
       trim: true,
       maxlength: 100,
     },
-
     phone: {
       type: String,
       required: true,
       trim: true,
-      index: true,
     },
-
     label: {
       type: String,
       enum: ["Home", "Work", "Other"],
       default: "Home",
     },
-
     addressLine1: {
       type: String,
       required: true,
       trim: true,
       maxlength: 200,
     },
-
     addressLine2: {
       type: String,
       default: "",
       trim: true,
       maxlength: 200,
     },
-
     landmark: {
       type: String,
       default: "",
       trim: true,
       maxlength: 150,
     },
-
     city: {
       type: String,
       required: true,
       trim: true,
-      index: true,
     },
-
     state: {
       type: String,
       required: true,
       trim: true,
     },
-
     pincode: {
       type: String,
       required: true,
       match: /^[1-9][0-9]{5}$/, // Indian pincode validation
-      index: true,
     },
-
     country: {
       type: String,
       default: "India",
       trim: true,
     },
-
-    // GeoJSON for scalable geo queries
     location: {
       type: {
         type: String,
@@ -99,37 +76,36 @@ const addressSchema = new mongoose.Schema(
         default: undefined,
       },
     },
-
     locationType: {
       type: String,
       enum: ["manual", "gps", "gps_manual"],
       default: "manual",
     },
-
     isDefault: {
       type: Boolean,
       default: false,
     },
-
     isDeleted: {
       type: Boolean,
       default: false,
-      index: true,
     },
   },
   { timestamps: true }
 );
 
 /**
- * INDEXES (Performance + Consistency)
+ * CONSOLIDATED INDEXES
  */
 addressSchema.index({ userId: 1, createdAt: -1 });
-addressSchema.index({ userId: 1, isDefault: 1 });
+// addressSchema.index({ userId: 1, isDefault: 1 }); // Duplicated by unique partial index below
 addressSchema.index({ location: "2dsphere" });
+addressSchema.index({ phone: 1 });
+addressSchema.index({ city: 1 });
+addressSchema.index({ pincode: 1 });
+addressSchema.index({ isDeleted: 1 });
 
 /**
  * UNIQUE DEFAULT ADDRESS PER USER
- * (Partial index ensures only one default per user)
  */
 addressSchema.index(
   { userId: 1, isDefault: 1 },
@@ -140,26 +116,19 @@ addressSchema.index(
 );
 
 /**
- * PRE-SAVE HOOK: Normalize & enforce rules
+ * PRE-SAVE HOOK
  */
 addressSchema.pre("save", async function (next) {
   try {
-    // Normalize phone (remove spaces, dashes)
     if (this.phone) {
       this.phone = this.phone.replace(/[^0-9+]/g, "");
     }
-
-    // Normalize location
     if (this.location?.coordinates?.length === 2) {
       const [lng, lat] = this.location.coordinates;
-      if (
-        typeof lng !== "number" ||
-        typeof lat !== "number"
-      ) {
+      if (typeof lng !== "number" || typeof lat !== "number") {
         this.location = undefined;
       }
     }
-
     next();
   } catch (err) {
     next(err);
@@ -174,20 +143,16 @@ addressSchema.statics.setDefaultAddress = async function (userId, addressId) {
   session.startTransaction();
 
   try {
-    // Unset previous default
     await this.updateMany(
       { userId, isDefault: true },
       { $set: { isDefault: false } },
       { session }
     );
-
-    // Set new default
     await this.updateOne(
       { _id: addressId, userId },
       { $set: { isDefault: true } },
       { session }
     );
-
     await session.commitTransaction();
     session.endSession();
   } catch (err) {

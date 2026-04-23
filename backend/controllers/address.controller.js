@@ -24,21 +24,15 @@ function buildFormattedAddress(data) {
 // CREATE ADDRESS (TRANSACTION SAFE)
 // ===============================
 exports.createAddress = asyncHandler(async (req, res) => {
-  const payload = addressSchema.parse(req.body);
-  const userId = req.user._id;
-
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
+    const payload = addressSchema.parse(req.body);
+    const userId = req.user._id;
+
     if (payload.isDefault) {
-      await addressRepository.unsetDefaults(userId, session);
+      await addressRepository.unsetDefaults(userId);
     }
 
-    const addr = await addressRepository.create(
-      { ...payload, userId },
-      session
-    );
+    const addr = await addressRepository.create({ ...payload, userId });
 
     const update = { $addToSet: { addresses: addr._id } };
 
@@ -53,15 +47,11 @@ exports.createAddress = asyncHandler(async (req, res) => {
       };
     }
 
-    await User.updateOne({ _id: userId }, update, { session });
-
-    await session.commitTransaction();
-    session.endSession();
+    await User.updateOne({ _id: userId }, update);
 
     return ok(res, addr, "Address created", 201);
   } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
+    console.error("CREATE_ADDRESS_ERROR:", err);
     throw err;
   }
 });
@@ -164,6 +154,17 @@ exports.deleteAddress = asyncHandler(async (req, res) => {
 });
 
 // ===============================
+// LIST ADDRESSES (SAFE)
+// ===============================
+exports.listAddresses = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const addresses = await addressRepository.findByUser(userId);
+  
+  // Return in structure requested by user: { success: true, addresses }
+  return res.json({ success: true, addresses });
+});
+
+// ===============================
 // SET DEFAULT (RACE SAFE)
 // ===============================
 exports.setDefaultAddress = asyncHandler(async (req, res) => {
@@ -197,7 +198,7 @@ exports.setDefaultAddress = asyncHandler(async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    return ok(res, { ok: true });
+    return res.json({ success: true, ok: true });
   } catch (err) {
     await session.abortTransaction();
     session.endSession();

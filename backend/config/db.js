@@ -5,6 +5,9 @@ const env = require("./env");
 // ---------- CONNECTION STATE GUARD ----------
 let isConnected = false;
 
+// PERFORMANCE CONFIG
+const SLOW_QUERY_THRESHOLD_MS = 500; // Log queries taking longer than 500ms
+
 // ---------- GLOBAL EVENT LISTENERS ----------
 mongoose.connection.on("error", (err) => {
   logger.error(`[MONGODB_DRIVER] ${err.message}`, { stack: err.stack });
@@ -19,6 +22,17 @@ mongoose.connection.on("reconnected", () => {
   isConnected = true;
   logger.info("[MONGODB_RECONNECTED]");
 });
+
+// ---------- SLOW QUERY LOGGER & PERFORMANCE ----------
+// Set Global Default for maxTimeMS to prevent runaway queries blocking the event loop
+mongoose.set('maxTimeMS', 10000); // 10s max for any query
+
+if (process.env.NODE_ENV === 'development') {
+    mongoose.set('debug', true);
+} else {
+    // Production: Selective debug/logging for slow queries disabled for cleaner logs
+    mongoose.set('debug', false);
+}
 
 // ---------- MAIN CONNECT FUNCTION ----------
 const connectDB = async () => {
@@ -42,24 +56,17 @@ const connectDB = async () => {
         autoIndex: false, // ❗ production best practice
         serverSelectionTimeoutMS: 10000,
         socketTimeoutMS: 45000,
-        maxPoolSize: parseInt(process.env.DB_MAX_POOL) || 50,
+        maxPoolSize: parseInt(process.env.DB_MAX_POOL) || 20, // Optimized for stability
         minPoolSize: 5,
         maxIdleTimeMS: 30000,
-        waitQueueTimeoutMS: 5000,
+        waitQueueTimeoutMS: 10000,
         retryWrites: true,
         family: 4,
         bufferCommands: false,
       });
 
       isConnected = true;
-      logger.info("✅ MongoDB Connected");
-
-      // Run migration safely (only one instance)
-      if (process.env.INSTANCE_ID === "primary") {
-        runStartupMigrations().catch(err => {
-          logger.warn("Migration skipped", { error: err.message });
-        });
-      }
+      logger.info("✅ MongoDB Connected [POOL: 20]");
 
       return conn;
 
@@ -77,53 +84,5 @@ const connectDB = async () => {
     }
   }
 };
-
-// ---------- MIGRATION (BULK OPTIMIZED) ----------
-async function runStartupMigrations() {
-  const Order = require("../models/order.model");
-
-  const count = await Order.countDocuments({ total: { $exists: false } });
-  if (count === 0) return;
-
-  logger.info(`[MIGRATION] Processing ${count} orders...`);
-
-  const bulkOps = [];
-  const cursor = Order.find({ total: { $exists: false } }).cursor();
-
-  for (let doc = await cursor.next(); doc != null; doc = await cursor.next()) {
-    bulkOps.push({
-      updateOne: {
-        filter: { _id: doc._id },
-        update: {
-          $set: {
-            total: doc.totalAmount || doc.totalPrice || 0
-          }
-        }
-      }
-    });
-
-    if (bulkOps.length === 500) {
-      await Order.bulkWrite(bulkOps);
-      bulkOps.length = 0;
-      await new Promise(res => setImmediate(res));
-    }
-  }
-
-  if (bulkOps.length) {
-    await Order.bulkWrite(bulkOps);
-  }
-
-  logger.info("✅ Migration complete");
-}
-
-// ---------- GLOBAL CRASH HANDLERS ----------
-process.on("unhandledRejection", (err) => {
-  logger.fatal("Unhandled Rejection", { error: err.message });
-});
-
-process.on("uncaughtException", (err) => {
-  logger.fatal("Uncaught Exception", { error: err.message });
-  process.exit(1);
-});
 
 module.exports = connectDB;

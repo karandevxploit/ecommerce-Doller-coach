@@ -79,7 +79,7 @@ export const ENDPOINTS = {
   // ======================
   REVIEWS: {
     BASE: build("/reviews"),
-    BY_PRODUCT: (id) => `/reviews/${id}`,
+    BY_PRODUCT: (id) => `/reviews/product/${id}`,
   },
 
   // ======================
@@ -111,11 +111,11 @@ export const ENDPOINTS = {
   // ======================
   ADMIN: {
     ANALYTICS: {
-      OVERVIEW: build("/admin/analytics/overview"),
-      TRAFFIC: build("/admin/analytics/traffic"),
-      TOP_PRODUCTS: build("/admin/analytics/top-products"),
-      ACTIVE_USERS: build("/admin/analytics/active-users"),
-      HEALTH: build("/admin/analytics/health"),
+      OVERVIEW: build("/admin/stats"),
+      TRAFFIC: build("/admin/revenue/trend"),
+      TOP_PRODUCTS: build("/admin/stats"), // Reuse main stats if specific one doesn't exist
+      ACTIVE_USERS: build("/admin/customers/stats"),
+      HEALTH: build("/admin/stats"),
     },
 
     PRODUCTS: {
@@ -138,7 +138,7 @@ export const ENDPOINTS = {
     },
 
     REVIEWS: {
-      BASE: build("/admin/reviews"),
+      BASE: build("/reviews/admin"),
       APPROVE: (id) => `/reviews/admin/${id}/approve`,
       DELETE: (id) => `/reviews/admin/${id}`,
     },

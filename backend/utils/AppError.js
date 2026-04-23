@@ -1,12 +1,10 @@
 /**
- * Custom Error Class for operational errors.
- * Unified status code and user-friendly messaging system.
+ * AppError - Custom error class for operational errors.
  */
 class AppError extends Error {
-  constructor(message, statusCode, errorCode = "INTERNAL_ERROR") {
+  constructor(message, statusCode) {
     super(message);
-    this.statusCode = statusCode;
-    this.errorCode = errorCode;
+    this.statusCode = statusCode || 500;
     this.status = `${statusCode}`.startsWith("4") ? "fail" : "error";
     this.isOperational = true;
 

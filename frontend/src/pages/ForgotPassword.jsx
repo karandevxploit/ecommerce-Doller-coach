@@ -3,11 +3,9 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import toast from "react-hot-toast";
 import { Sparkles, ArrowRight, Mail } from "lucide-react";
-import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 
 export default function ForgotPassword() {
   const navigate = useNavigate();
-  const { executeRecaptcha } = useGoogleReCaptcha();
 
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
@@ -30,19 +28,11 @@ export default function ForgotPassword() {
       return;
     }
 
-    if (!executeRecaptcha) {
-      toast.error("Verification failed. Please refresh and try again.");
-      return;
-    }
-
     setLoading(true);
 
     try {
-      const token = await executeRecaptcha("forgot_password");
-
       await api.post("/auth/send-otp", {
         email,
-        recaptchaToken: token,
       });
 
       toast.success("OTP sent to your email");

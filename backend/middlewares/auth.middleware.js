@@ -14,6 +14,10 @@ const extractToken = (req) => {
     return authHeader.split(" ")[1];
   }
 
+  if (req.cookies?.token) {
+    return req.cookies.token;
+  }
+  
   if (req.cookies?.accessToken) {
     return req.cookies.accessToken;
   }
@@ -57,6 +61,7 @@ exports.isAuthenticated = asyncHandler(async (req, res, next) => {
 
     req.user = {
       id: decoded.id,
+      _id: decoded.id,
       role,
       email: decoded.email || null,
     };

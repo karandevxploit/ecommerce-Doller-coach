@@ -7,3 +7,14 @@ yarn-debug.log*
 yarn-error.log*
 *.log
 dist
+node_modules/
+dist/
+build/
+logs/
+.cache/
+coverage/
+*.log
+backend/uploads/
+backend/logs/
+backend/scratch/
+frontend/build_error.txt

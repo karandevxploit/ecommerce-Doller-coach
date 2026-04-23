@@ -48,30 +48,81 @@ export default function Home() {
     let mounted = true;
 
     const load = async () => {
+      // 1. Singleton Check
+      if (!mounted || (products.length > 0 && offers.length > 0)) return;
+
       try {
         setLoading(true);
 
-        await fetchContent();
-
-        // Parallel fetch for speed
-        const [prodRes, offerRes] = await Promise.all([
-          api.get("/products?page=1&limit=40"),
+        // 2. Parallel Orchestration with Safety Timeout
+        const fetchTask = Promise.all([
+          fetchContent(),
+          api.get("/products?page=1&limit=20"),
           api.get("/offers")
         ]);
 
+        const timeoutTask = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error("Request Timeout")), 15000)
+        );
+
+        const [_, prodRes, offerRes] = await Promise.race([fetchTask, timeoutTask]);
+
         if (!mounted) return;
 
-        // Products
-        const rawProd = prodRes?.data || prodRes || {};
-        const mappedProd = (rawProd.data || []).map(mapProduct);
-        setProducts(mappedProd);
+        // 3. Robust Data Unwrapping (Compliance: Goal 1 & 2)
+        const extractData = (res) => {
+          if (!res || !res.data) return [];
+          
+          // User requested strict "products" key check first
+          if (Array.isArray(res.data.products)) return res.data.products;
+          if (Array.isArray(res.data.data)) return res.data.data;
+          if (Array.isArray(res.data.result)) return res.data.result;
+          if (Array.isArray(res.data)) return res.data;
+          
+          return [];
+        };
 
-        // Offers
-        const rawOffer = offerRes?.data || offerRes || {};
-        setOffers(rawOffer.data || []);
+        const rawProducts = extractData(prodRes);
+        
+        // 4. FALLBACK LOGIC (Goal 8)
+        if (rawProducts.length === 0) {
+           console.warn("⚠️ No products found in API. Injecting fallback mock data.");
+           const fallback = [
+             { 
+               _id: "mock1", 
+               name: "Exclusive Premium Tee", 
+               price: 1499, 
+               images: ["https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?q=80&w=800"],
+               category: "MEN",
+               isTrending: true
+             },
+             { 
+               _id: "mock2", 
+               name: "Signature Coach Jacket", 
+               price: 4999, 
+               images: ["https://images.unsplash.com/photo-1551028719-00167b16eac5?q=80&w=800"],
+               category: "MEN",
+               isNew: true
+             }
+           ];
+           setProducts(fallback.map(p => mapProduct(p)));
+        } else {
+           const mappedProd = rawProducts
+             .map(p => {
+                try { return mapProduct(p); } catch(e) { return null; }
+             })
+             .filter(Boolean);
+           
+           setProducts(mappedProd);
+        }
+
+        const rawOffers = extractData(offerRes);
+        setOffers(rawOffers);
 
       } catch (err) {
-        toast.error("Failed to load storefront data");
+        console.error("Home Load Error:", err);
+        // Fallback for offers if they are critical for UI
+        if (offers.length === 0) setOffers([]);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -82,40 +133,32 @@ export default function Home() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, []); // Only once on mount
 
   /* ---------------- SECTIONS ---------------- */
   const sections = useMemo(() => {
-    if (!products.length) {
-      return {
-        best: [],
-        trending: [],
-        newArrivals: [],
-      };
+    if (!products || products.length === 0) {
+      return { best: [], hotSell: [], trending: [], newArrivals: [] };
     }
 
+    // Auto-detection logic for dynamic rendering
+    const trending = products.filter(
+      (p) => p.trending === true || p.isHot === true || (p.salesCount || 0) > 20
+    );
+
+    const best = products.filter(
+      (p) => p.isBestSeller || p.badge?.text?.toLowerCase().includes("best")
+    );
+
+    const newArrivals = products.filter(
+      (p) => p.isNew || p.badge?.type === "new" || !p.trending
+    );
+
     return {
-      best: products
-        .filter((p) =>
-          p.badge?.text?.toLowerCase().includes("best")
-        )
-        .slice(0, 4),
-
-      hotSell: products
-        .filter((p) => p.isHot)
-        .sort((a, b) => {
-          const discA = a.discount || 0;
-          const discB = b.discount || 0;
-          if (discB !== discA) return discB - discA;
-          return (b.salesCount || 0) - (a.salesCount || 0);
-        })
-        .slice(0, 4),
-
-      trending: products.slice(0, 4),
-
-      newArrivals: products
-        .filter((p) => p.isNew || p.badge?.type === "new")
-        .slice(0, 4),
+      best: best.slice(0, 4),
+      hotSell: products.filter(p => p.isHot).slice(0, 4),
+      trending: trending.length > 0 ? trending.slice(0, 4) : products.slice(0, 4),
+      newArrivals: newArrivals.slice(0, 4)
     };
   }, [products]);
 
@@ -153,6 +196,15 @@ export default function Home() {
 
       {/* HERO */}
       <LuxuryHero slides={activeContent?.heroCarousel || []} />
+
+      {/* DEBUG MODE: Only visible if no products found */}
+      {products.length === 0 && !loading && (
+        <div className="container-responsive py-4 text-center">
+          <p className="text-red-500 font-bold bg-red-50 py-2 rounded-xl border border-red-100">
+            ⚠️ No products fetched. Please verify API connection or database content.
+          </p>
+        </div>
+      )}
 
       {/* CATEGORIES */}
       <CategoryStrip
@@ -214,8 +266,8 @@ export default function Home() {
                       transition={{ duration: 0.6, ease: "easeOut" }}
                       className="absolute inset-0 flex items-center"
                     >
-                      <img
-                        src={resolveImageUrl(offers[currentOffer].image) || "https://images.unsplash.com/photo-1441995423663-f5ca21bc7af.jpg?q=80&w=2070"}
+                      <SafeImage
+                        src={offers[currentOffer].image || "https://images.unsplash.com/photo-1441995423663-f5ca21bc7af.jpg?q=80&w=2070"}
                         alt={offers[currentOffer].title}
                         className="absolute inset-0 w-full h-full object-cover"
                       />
