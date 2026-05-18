@@ -1,39 +1,102 @@
 import { api } from "./client";
+import toast from "react-hot-toast";
 
-/**
- * ======================
- * HELPERS
- * ======================
- */
+const isUploadUrl = (url) => {
+  if (!url || typeof url !== "string") return false;
 
-// Compress image (basic canvas compression)
+  if (url.startsWith("/uploads/") || url.startsWith("uploads/")) return true;
+
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname.startsWith("/uploads/");
+  } catch {
+    return false;
+  }
+};
+
+const extractUrl = (data) => {
+  return (
+    data?.data?.url ||
+    data?.data?.imageUrl ||
+    data?.data?.secure_url ||
+    data?.data?.videoUrl ||
+    data?.url ||
+    data?.imageUrl ||
+    data?.secure_url ||
+    data?.videoUrl ||
+    ""
+  );
+};
+
+const extractMultipleUrls = (data) => {
+  const payload = data?.data || data || {};
+  const list = payload.images || payload.files || payload.urls || [];
+
+  if (!Array.isArray(list)) return [];
+
+  return list
+    .map((item) => {
+      if (typeof item === "string") return item;
+      return extractUrl(item);
+    })
+    .filter(Boolean);
+};
+
+const assertLocalUploadUrl = (url, type = "file") => {
+  if (!url) {
+    throw new Error(`${type} upload failed: missing upload URL`);
+  }
+
+  if (!isUploadUrl(url)) {
+    throw new Error(`${type} upload failed: file was not saved locally`);
+  }
+
+  return url;
+};
+
 const compressImage = (file, quality = 0.7) => {
   return new Promise((resolve) => {
-    if (!file.type.startsWith("image/")) return resolve(file);
+    if (!file?.type?.startsWith("image/")) {
+      resolve(file);
+      return;
+    }
 
     const img = new Image();
     const reader = new FileReader();
 
-    reader.onload = (e) => {
-      img.src = e.target.result;
+    reader.onload = (event) => {
+      img.src = event.target?.result;
     };
+
+    reader.onerror = () => resolve(file);
+    img.onerror = () => resolve(file);
 
     img.onload = () => {
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
 
-      // Resize if too large
+      if (!ctx) {
+        resolve(file);
+        return;
+      }
+
       const maxWidth = 1200;
       const scale = Math.min(1, maxWidth / img.width);
 
-      canvas.width = img.width * scale;
-      canvas.height = img.height * scale;
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
 
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
       canvas.toBlob(
         (blob) => {
-          resolve(new File([blob], file.name, { type: "image/jpeg" }));
+          if (!blob) {
+            resolve(file);
+            return;
+          }
+
+          const safeName = file.name?.replace(/\.[^.]+$/, ".jpg") || "image.jpg";
+          resolve(new File([blob], safeName, { type: "image/jpeg" }));
         },
         "image/jpeg",
         quality
@@ -44,9 +107,6 @@ const compressImage = (file, quality = 0.7) => {
   });
 };
 
-// ======================
-// CORE UPLOAD WITH PROGRESS + RETRY
-// ======================
 const uploadWithProgress = async ({
   url,
   formData,
@@ -54,20 +114,21 @@ const uploadWithProgress = async ({
   retries = 2,
 }) => {
   try {
-    const res = await api.post(url, formData, {
+    return await api.post(url, formData, {
       headers: { "Content-Type": "multipart/form-data" },
-
-      onUploadProgress: (e) => {
-        if (onProgress && e.total) {
-          const percent = Math.round((e.loaded * 100) / e.total);
+      onUploadProgress: (event) => {
+        if (onProgress && event.total) {
+          const percent = Math.round((event.loaded * 100) / event.total);
           onProgress(percent);
         }
       },
     });
-
-    return res;
   } catch (err) {
-    if (retries > 0) {
+    const status = err?.response?.status;
+    const canRetry = !status || status >= 500;
+
+    if (retries > 0 && canRetry) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
       return uploadWithProgress({
         url,
         formData,
@@ -75,86 +136,115 @@ const uploadWithProgress = async ({
         retries: retries - 1,
       });
     }
+
     throw err;
   }
 };
 
-// ======================
-// SINGLE IMAGE
-// ======================
 export const uploadImage = async (file, onProgress) => {
+  if (!file) {
+    throw new Error("No image selected");
+  }
+
   const compressed = await compressImage(file);
 
   const formData = new FormData();
-  formData.append("files", compressed);
+  formData.append("image", compressed);
 
-  const res = await uploadWithProgress({
-    url: "/uploads/single",
-    formData,
-    onProgress,
-  });
+  try {
+    const res = await uploadWithProgress({
+      url: "/uploads/single",
+      formData,
+      onProgress,
+    });
 
-  return res.data.url || res.data.data?.url;
+    const imageUrl = extractUrl(res?.data);
+    return assertLocalUploadUrl(imageUrl, "Image");
+  } catch (err) {
+    console.error("[UPLOAD_SINGLE_ERROR]", err?.response?.data || err?.message);
+    throw err;
+  }
 };
 
-// ======================
-// MULTIPLE IMAGES
-// ======================
-export const uploadMultipleImages = async (files, onProgress) => {
+export const uploadMultipleImages = async (files = [], onProgress) => {
+  const validFiles = Array.from(files).filter(Boolean);
+
+  if (!validFiles.length) {
+    return [];
+  }
+
   const compressedFiles = await Promise.all(
-    files.map((f) => compressImage(f))
+    validFiles.map((file) => compressImage(file))
   );
 
   const formData = new FormData();
-  files.forEach((file) => formData.append("files", file));
+  compressedFiles.forEach((file) => formData.append("images", file));
 
-  const res = await api.post("/uploads/multiple", formData, {
-    headers: { "Content-Type": "multipart/form-data" },
-  });
+  try {
+    const res = await uploadWithProgress({
+      url: "/uploads/multiple",
+      formData,
+      onProgress,
+    });
 
-  return res.data.urls;
+    const urls = extractMultipleUrls(res?.data);
+    return urls.map((url) => assertLocalUploadUrl(url, "Image"));
+  } catch (err) {
+    console.error("[UPLOAD_MULTIPLE_ERROR]", err?.response?.data || err?.message);
+
+    if (err?.response?.status !== 400) {
+      toast.error(err?.response?.data?.message || err?.message || "Upload failed");
+    }
+
+    throw err;
+  }
 };
 
-// Extract URL safely
-export const extractUrl = (data) =>
-  data?.data?.videoUrl || data?.data?.url || data?.url || data?.imageUrl || "";
+export { extractUrl };
 
-// ======================
-// PRODUCT VIDEO UPLOAD
-// ======================
 export const uploadProductVideo = async (file, onProgress) => {
+  if (!file) {
+    throw new Error("No video selected");
+  }
+
   const formData = new FormData();
   formData.append("video", file);
 
-  const res = await uploadWithProgress({
-    url: "/uploads/video",
-    formData,
-    onProgress,
-  });
+  try {
+    const res = await uploadWithProgress({
+      url: "/uploads/video",
+      formData,
+      onProgress,
+    });
 
-  const videoData = res.data?.data || res.data;
-  if (!videoData?.url && !videoData?.videoUrl) throw new Error("Video upload failed");
+    const videoUrl = extractUrl(res?.data);
+    assertLocalUploadUrl(videoUrl, "Video");
 
-  return {
-    url: videoData.url || videoData.videoUrl,
-    publicId: videoData.publicId || videoData.public_id,
-    size: videoData.size || file.size
-  };
+    const payload = res?.data?.data || res?.data || {};
+
+    return {
+      url: videoUrl,
+      size: payload.size || file.size,
+      publicId: payload.publicId || payload.public_id || "",
+      duration: payload.duration || null,
+    };
+  } catch (err) {
+    console.error("[UPLOAD_VIDEO_ERROR]", err?.response?.data || err?.message);
+    throw err;
+  }
 };
 
-/**
- * ======================
- * DRAG & DROP HANDLER
- * ======================
- */
 export const useDragDrop = (onFiles) => {
-  const handleDrop = (e) => {
-    e.preventDefault();
-    const files = Array.from(e.dataTransfer.files || []);
+  const handleDrop = (event) => {
+    event.preventDefault();
+
+    const files = Array.from(event.dataTransfer?.files || []);
     onFiles(files);
   };
 
-  const handleDragOver = (e) => e.preventDefault();
+  const handleDragOver = (event) => {
+    event.preventDefault();
+  };
 
   return {
     onDrop: handleDrop,

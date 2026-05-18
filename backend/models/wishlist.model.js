@@ -1,82 +1,28 @@
-const mongoose = require("mongoose");
+const { createMysqlDocumentModel } = require("../utils/mysqlDocumentModel");
 
-/**
- * ENTERPRISE WISHLIST SYSTEM
- */
-
-const MAX_WISHLIST_ITEMS = 100;
-
-const wishlistItemSchema = new mongoose.Schema(
-  {
-    productId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Product",
-      required: true,
+module.exports = createMysqlDocumentModel("Wishlist", {
+  statics: {
+    async addItem(userId, productId) {
+      const wishlist = (await this.findOne({ userId })) || new this({ userId, items: [] });
+      wishlist.items = Array.isArray(wishlist.items) ? wishlist.items : [];
+      if (!wishlist.items.some((item) => String(item.productId) === String(productId))) {
+        wishlist.items.push({ productId, addedAt: new Date().toISOString() });
+      }
+      await wishlist.save();
+      return wishlist;
     },
-    addedAt: {
-      type: Date,
-      default: Date.now,
+    removeItem(userId, productId) {
+      return this.updateOne({ userId }, { $pull: { items: { productId } } });
     },
-  },
-  { _id: false }
-);
-
-const wishlistSchema = new mongoose.Schema(
-  {
-    userId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-      unique: true,
-    },
-    items: {
-      type: [wishlistItemSchema],
-      validate: {
-        validator: function (val) {
-          return val.length <= MAX_WISHLIST_ITEMS;
-        },
-        message: `Wishlist cannot exceed ${MAX_WISHLIST_ITEMS} items`,
-      },
+    async toggleItem(userId, productId) {
+      const wishlist = (await this.findOne({ userId })) || new this({ userId, items: [] });
+      wishlist.items = Array.isArray(wishlist.items) ? wishlist.items : [];
+      const exists = wishlist.items.some((item) => String(item.productId) === String(productId));
+      wishlist.items = exists
+        ? wishlist.items.filter((item) => String(item.productId) !== String(productId))
+        : [...wishlist.items, { productId, addedAt: new Date().toISOString() }];
+      await wishlist.save();
+      return { wishlist, added: !exists };
     },
   },
-  { timestamps: true }
-);
-
-/**
- * CONSOLIDATED INDEXES
- */
-// wishlistSchema.index({ userId: 1 }); // Duplicated by unique: true on field
-wishlistSchema.index({ "items.productId": 1 });
-wishlistSchema.index({ "items.addedAt": 1 });
-
-/**
- * STATIC METHODS
- */
-wishlistSchema.statics.addItem = async function (userId, productId) {
-  return this.findOneAndUpdate(
-    { userId, "items.productId": { $ne: productId } },
-    { $push: { items: { productId } } },
-    { new: true, upsert: true }
-  );
-};
-
-wishlistSchema.statics.removeItem = function (userId, productId) {
-  return this.updateOne({ userId }, { $pull: { items: { productId } } });
-};
-
-wishlistSchema.statics.toggleItem = async function (userId, productId) {
-  const doc = await this.findOne({ userId });
-  if (!doc) {
-    return this.create({ userId, items: [{ productId }] });
-  }
-  const exists = doc.items.some((i) => String(i.productId) === String(productId));
-  if (exists) {
-    return this.updateOne({ userId }, { $pull: { items: { productId } } });
-  } else {
-    return this.updateOne({ userId }, { $push: { items: { productId } } });
-  }
-};
-
-module.exports =
-  mongoose.models.Wishlist ||
-  mongoose.model("Wishlist", wishlistSchema);
+});

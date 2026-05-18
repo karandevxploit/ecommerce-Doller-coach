@@ -55,6 +55,7 @@ class HybridCache {
   // SMART GET-OR-SET (DEDUPLICATED)
   // =========================
   async getOrSet(key, fetchFn, ttl = 60) {
+    const startTime = Date.now();
     // 1. Check if same request is already in flight
     if (this.inFlight.has(key)) {
       return this.inFlight.get(key);
@@ -65,7 +66,13 @@ class HybridCache {
       try {
         // Double check cache before fetching
         const cached = await this.get(key);
-        if (cached) return cached;
+        if (cached) {
+          const duration = Date.now() - startTime;
+          logger.info(`[CACHE_HIT] ${key} - ${duration}ms`);
+          return cached;
+        }
+
+        logger.info(`[CACHE_MISS] ${key}`);
 
         // Fetch fresh data
         const fresh = await fetchFn();
@@ -84,6 +91,61 @@ class HybridCache {
 
     this.inFlight.set(key, fetchPromise);
     return fetchPromise;
+  }
+
+  // =========================
+  // STALE-WHILE-REVALIDATE
+  // =========================
+  async getOrSetStale(key, fetchFn, ttl = 60, staleTtl = 300) {
+    const staleKey = `${key}:stale`;
+    const lockKey = `lock:refresh:${key}`;
+
+    try {
+      const fresh = await this.get(key);
+      if (fresh) return fresh;
+
+      const stale = await this.get(staleKey);
+      if (stale) {
+        const lock = await redis.set(lockKey, "1", "NX", "EX", 20);
+        if (lock) {
+          setImmediate(async () => {
+            try {
+              const updated = await fetchFn();
+              if (updated) {
+                await this.set(key, updated, ttl);
+                await this.set(staleKey, updated, staleTtl);
+              }
+            } catch (err) {
+              logger.error(`[CACHE_STALE_REFRESH_ERR] ${key}: ${err.message}`);
+            } finally {
+              await redis.del(lockKey);
+            }
+          });
+        }
+        return stale;
+      }
+
+      if (this.inFlight.has(key)) return this.inFlight.get(key);
+      const fetchPromise = (async () => {
+        try {
+          const value = await fetchFn();
+          if (value) {
+            await Promise.all([
+              this.set(key, value, ttl),
+              this.set(staleKey, value, staleTtl),
+            ]);
+          }
+          return value;
+        } finally {
+          this.inFlight.delete(key);
+        }
+      })();
+      this.inFlight.set(key, fetchPromise);
+      return fetchPromise;
+    } catch (err) {
+      logger.error(`[CACHE_STALE_GET_ERR] ${key}: ${err.message}`);
+      return fetchFn();
+    }
   }
 
   // =========================

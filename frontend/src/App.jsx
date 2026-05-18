@@ -1,5 +1,6 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Link } from "react-router-dom";
 import { useEffect, Suspense, lazy } from "react";
+import { Toaster } from "react-hot-toast";
 import Layout from "./components/layout/Layout";
 import {
   useAuthStore,
@@ -9,6 +10,7 @@ import {
 import GlobalLoader from "./components/ui/GlobalLoader";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 import ScrollToTop from "./components/utils/ScrollToTop";
+import { ErrorBoundary } from "./components/common/ErrorBoundary";
 
 /* ---------------- ERROR FALLBACK ---------------- */
 function ErrorFallback() {
@@ -22,6 +24,7 @@ function ErrorFallback() {
           Please refresh the page or try again later.
         </p>
         <button
+          type="button"
           onClick={() => window.location.reload()}
           className="px-4 py-2 bg-black text-white rounded"
         >
@@ -43,12 +46,9 @@ function NotFound() {
         <p className="text-gray-500 mb-4">
           The page you are looking for doesn’t exist.
         </p>
-        <a
-          href="/"
-          className="text-black underline"
-        >
+        <Link to="/" className="text-black underline">
           Go back home
-        </a>
+        </Link>
       </div>
     </div>
   );
@@ -83,17 +83,136 @@ const Users = lazy(() => import("./admin/pages/Users"));
 const Offers = lazy(() => import("./admin/pages/Offers"));
 const AdminReviews = lazy(() => import("./admin/pages/Reviews"));
 const AdminSettings = lazy(() => import("./admin/pages/Settings"));
-const SiteContentManager = lazy(() => import("./admin/pages/SiteContentManager"));
+const SiteContentManager = lazy(() =>
+  import("./admin/pages/SiteContentManager")
+);
+const Categories = lazy(() => import("./admin/pages/Categories"));
+const Shipments = lazy(() => import("./admin/pages/Shipments"));
 
-/* ---------------- ROOT REDIRECT ---------------- */
-function RootRedirect() {
-  const { isInitialized } = useAuthStore();
+/* ---------------- APP ROUTES ---------------- */
+function AppRoutes() {
+  return (
+    <>
+      <ScrollToTop />
 
-  if (!isInitialized) {
-    return <GlobalLoader isVisible />;
-  }
+      <ErrorBoundary fallback={<ErrorFallback />}>
+        <Suspense fallback={<GlobalLoader isVisible />}>
+          <Routes>
+            {/* ADMIN AUTH */}
+            <Route path="/admin/login" element={<AdminLogin />} />
+            <Route path="/admin/register" element={<AdminRegister />} />
 
-  return <Home />;
+            {/* ADMIN ROUTES */}
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute role="admin">
+                  <AdminLayout />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<Navigate to="dashboard" replace />} />
+              <Route path="dashboard" element={<Dashboard />} />
+              <Route path="products" element={<Products />} />
+              <Route path="orders" element={<Orders />} />
+              <Route path="users" element={<Users />} />
+              <Route path="offers" element={<Offers />} />
+              <Route path="reviews" element={<AdminReviews />} />
+              <Route path="settings" element={<AdminSettings />} />
+              <Route path="site-content" element={<SiteContentManager />} />
+              <Route path="categories" element={<Categories />} />
+              <Route path="shipments" element={<Shipments />} />
+            </Route>
+
+            {/* USER ROUTES */}
+            <Route path="/" element={<Layout />}>
+              <Route index element={<Home />} />
+
+              <Route path="login" element={<Login />} />
+              <Route path="register" element={<Register />} />
+
+              {/* OTP aliases */}
+              <Route path="verify" element={<VerifyOtp />} />
+              <Route path="verify-otp" element={<VerifyOtp />} />
+
+              <Route path="forgot-password" element={<ForgotPassword />} />
+              <Route path="verify-reset-otp" element={<VerifyResetOtp />} />
+              <Route path="reset-password" element={<ResetPassword />} />
+
+              <Route path="cart" element={<Cart />} />
+
+              <Route
+                path="checkout"
+                element={
+                  <ProtectedRoute role="user">
+                    <Checkout />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="profile"
+                element={
+                  <ProtectedRoute role="user">
+                    <Profile />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route path="wishlist" element={<Wishlist />} />
+              <Route path="search" element={<Search />} />
+              <Route path="collection" element={<Collection />} />
+              <Route path="collection/:gender" element={<Collection />} />
+              <Route path="category/:gender" element={<Collection />} />
+              <Route path="product/:id" element={<ProductPage />} />
+
+              <Route
+                path="my-orders"
+                element={
+                  <ProtectedRoute role="user">
+                    <MyOrders />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="order-success"
+                element={
+                  <ProtectedRoute role="user">
+                    <OrderSuccess />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="order-success/:id"
+                element={
+                  <ProtectedRoute role="user">
+                    <OrderSuccess />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="order/:id"
+                element={
+                  <ProtectedRoute role="user">
+                    <OrderSuccess />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* 404 */}
+              <Route path="*" element={<NotFound />} />
+            </Route>
+
+            {/* GLOBAL 404 */}
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
+    </>
+  );
 }
 
 /* ---------------- APP ---------------- */
@@ -104,24 +223,33 @@ function App() {
     fetchUser,
   } = useAuthStore();
 
-  const fetchCart = useCartStore(
-    (s) => s.fetchCart
-  );
-  const fetchWishlist = useWishlistStore(
-    (s) => s.fetchWishlist
-  );
+  const fetchCart = useCartStore((state) => state.fetchCart);
+  const fetchWishlist = useWishlistStore((state) => state.fetchWishlist);
 
   /* ---------------- INIT AUTH ---------------- */
   useEffect(() => {
-    fetchUser();
+    Promise.resolve(fetchUser?.()).catch(() => {});
+
+    const timer = setTimeout(() => {
+      const state = useAuthStore.getState?.();
+      if (state && !state.isInitialized) {
+        useAuthStore.setState({
+          isInitialized: true,
+          loading: false,
+          isFetchingUser: false,
+        });
+      }
+    }, 2500);
+
+    return () => clearTimeout(timer);
   }, [fetchUser]);
 
   /* ---------------- LOAD USER DATA ---------------- */
   useEffect(() => {
     if (!isInitialized || !isAuthenticated) return;
 
-    fetchCart();
-    fetchWishlist();
+    fetchCart?.();
+    fetchWishlist?.();
   }, [isInitialized, isAuthenticated, fetchCart, fetchWishlist]);
 
   /* ---------------- BLOCK UI UNTIL READY ---------------- */
@@ -131,94 +259,30 @@ function App() {
 
   return (
     <BrowserRouter>
-      <ScrollToTop />
-
-      <Suspense fallback={<GlobalLoader isVisible />}>
-        <Routes>
-          {/* USER ROUTES */}
-          <Route path="/" element={<Layout />}>
-            <Route index element={<RootRedirect />} />
-
-            <Route path="login" element={<Login />} />
-            <Route path="register" element={<Register />} />
-            <Route path="verify" element={<VerifyOtp />} />
-            <Route path="forgot-password" element={<ForgotPassword />} />
-            <Route path="verify-reset-otp" element={<VerifyResetOtp />} />
-            <Route path="reset-password" element={<ResetPassword />} />
-
-            <Route path="cart" element={<Cart />} />
-            <Route
-              path="checkout"
-              element={
-                <ProtectedRoute role="user">
-                  <Checkout />
-                </ProtectedRoute>
-              }
-            />
-
-            <Route
-              path="profile"
-              element={
-                <ProtectedRoute role="user">
-                  <Profile />
-                </ProtectedRoute>
-              }
-            />
-
-            <Route path="wishlist" element={<Wishlist />} />
-            <Route path="search" element={<Search />} />
-            <Route path="collection" element={<Collection />} />
-            <Route path="collection/:category" element={<Collection />} />
-
-            <Route
-              path="my-orders"
-              element={
-                <ProtectedRoute role="user">
-                  <MyOrders />
-                </ProtectedRoute>
-              }
-            />
-
-            <Route
-              path="order-success/:id"
-              element={
-                <ProtectedRoute role="user">
-                  <OrderSuccess />
-                </ProtectedRoute>
-              }
-            />
-
-            <Route path="product/:id" element={<ProductPage />} />
-
-            {/* 404 */}
-            <Route path="*" element={<NotFound />} />
-          </Route>
-
-          {/* ADMIN AUTH */}
-          <Route path="/admin/login" element={<AdminLogin />} />
-          <Route path="/admin/register" element={<AdminRegister />} />
-
-          {/* ADMIN ROUTES */}
-          <Route
-            path="/admin"
-            element={
-              <ProtectedRoute role="admin">
-                <AdminLayout />
-              </ProtectedRoute>
-            }
-          >
-            <Route index element={<Navigate to="dashboard" replace />} />
-            <Route path="dashboard" element={<Dashboard />} />
-            <Route path="products" element={<Products />} />
-            <Route path="orders" element={<Orders />} />
-            <Route path="users" element={<Users />} />
-            <Route path="offers" element={<Offers />} />
-            <Route path="reviews" element={<AdminReviews />} />
-            <Route path="settings" element={<AdminSettings />} />
-            <Route path="site-content" element={<SiteContentManager />} />
-          </Route>
-        </Routes>
-      </Suspense>
+      <AppRoutes />
+      <Toaster
+        position="top-right"
+        containerStyle={{
+          top: "100px",
+          right: "20px",
+          zIndex: 99999,
+        }}
+        toastOptions={{
+          duration: 4500,
+          className:
+            "rounded-xl bg-white text-slate-900 border shadow-2xl px-4 py-3 text-xs font-bold",
+          style: { zIndex: 99999 },
+          error: {
+            duration: 7000,
+            className:
+              "rounded-xl bg-red-50 text-red-900 border border-red-200 shadow-2xl px-4 py-3 text-xs font-bold",
+          },
+          success: {
+            className:
+              "rounded-xl bg-emerald-50 text-emerald-900 border border-emerald-200 shadow-2xl px-4 py-3 text-xs font-bold",
+          },
+        }}
+      />
     </BrowserRouter>
   );
 }

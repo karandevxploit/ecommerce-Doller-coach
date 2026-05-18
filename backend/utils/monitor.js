@@ -2,6 +2,7 @@ const { monitorEventLoopDelay } = require("perf_hooks");
 const v8 = require("v8");
 const { logger } = require("../utils/logger");
 const env = require("../config/env");
+const metricsService = require("../services/metrics.service");
 
 /**
  * PRODUCTION-GRADE SYSTEM MONITOR (Optimized)
@@ -17,6 +18,7 @@ const MONITOR_INTERVAL = 60000; // 60 seconds
 const GC_INTERVAL = 300000;    // 5 minutes
 
 let monitorStarted = false;
+let highErrorRateStreak = 0;
 
 const startMonitoring = () => {
     if (monitorStarted) return;
@@ -48,6 +50,22 @@ const startMonitoring = () => {
         // Silent log for production, more detailed for dev
         if (env.NODE_ENV !== "production" || remainingMB < 100 || lag > 100) {
             logger.info(`📊 [MONITOR] Heap: ${heapUsedMB}MB/${heapLimitMB}MB | Lag: ${lag.toFixed(2)}ms | RSS: ${Math.round(mem.rss/1024/1024)}MB`);
+        }
+
+        const metrics = metricsService.snapshot();
+        if (metrics.errorRate1m >= 10 && metrics.requestRate1m >= 20) {
+            highErrorRateStreak += 1;
+            logger.error({
+                errorRate1m: metrics.errorRate1m,
+                requestRate1m: metrics.requestRate1m,
+                streak: highErrorRateStreak,
+            }, "ALERT_HIGH_ERROR_RATE");
+        } else {
+            highErrorRateStreak = 0;
+        }
+
+        if (lag > 250) {
+            logger.error({ lagMs: Number(lag.toFixed(2)) }, "ALERT_EVENT_LOOP_LAG");
         }
 
     }, MONITOR_INTERVAL).unref();

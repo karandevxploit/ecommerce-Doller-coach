@@ -1,146 +1,146 @@
 /**
- * API ENDPOINTS REGISTRY (FINAL)
+ * API ENDPOINTS REGISTRY
  * - Consistent naming
  * - Admin/User separation
  * - Function-safe dynamic routes
- * - Future scalable structure
  */
 
-const build = (path) => path;
+const build = (path) => `${path}`;
+
+const byId = (base, id) => `${base}/${encodeURIComponent(String(id))}`;
 
 export const ENDPOINTS = {
-  // ======================
-  // AUTH
-  // ======================
   AUTH: {
     LOGIN: build("/auth/login"),
     REGISTER: build("/auth/register"),
     LOGOUT: build("/auth/logout"),
-    REFRESH: build("/auth/refresh"), // 🔥 unified (fixed naming mismatch)
+    REFRESH: build("/auth/refresh-token"),
     PROFILE: build("/auth/profile"),
     ADDRESSES: build("/auth/addresses"),
     SEND_OTP: build("/auth/send-otp"),
     VERIFY_OTP: build("/auth/verify-otp"),
+    RESEND_OTP: build("/auth/resend-otp"),
     RESET_PASSWORD: build("/auth/reset-password"),
 
     ADMIN_LOGIN: build("/auth/admin-login"),
     ADMIN_EXISTS: build("/auth/admin-exists"),
   },
 
-  // ======================
-  // PRODUCTS
-  // ======================
   PRODUCTS: {
     LIST: build("/products"),
-    GET: (id) => `/products/${id}`,
+    GET: (id) => byId("/products", id),
     FILTERS: build("/products/filters"),
   },
 
-  // ======================
-  // CART & WISHLIST
-  // ======================
   CART: {
-    BASE: build("/carts"),
+    BASE: build("/cart"),
+    ADD: build("/cart/add"),
   },
 
   WISHLIST: {
     BASE: build("/wishlists"),
   },
 
-  // ======================
-  // COUPONS
-  // ======================
   COUPONS: {
     BASE: build("/coupons"),
     APPLY: build("/coupons/apply"),
   },
 
-  // ======================
-  // ORDERS
-  // ======================
   ORDERS: {
     BASE: build("/orders"),
     MY: build("/orders/my"),
-    GET: (id) => `/orders/${id}`,
+    GET: (id) => byId("/orders", id),
     CHECKOUT: build("/orders/checkout"),
+    INVOICE: (id) => `${byId("/orders", id)}/invoice`,
   },
 
-  // ======================
-  // PAYMENTS
-  // ======================
   PAYMENTS: {
     CREATE_ORDER: build("/payments/create-order"),
     VERIFY: build("/payments/verify"),
     WEBHOOK: build("/payments/webhook"),
   },
 
-  // ======================
-  // REVIEWS
-  // ======================
   REVIEWS: {
     BASE: build("/reviews"),
-    BY_PRODUCT: (id) => `/reviews/product/${id}`,
+    BY_PRODUCT: (id) => byId("/reviews/product", id),
   },
 
-  // ======================
-  // DELIVERY
-  // ======================
   DELIVERY: {
-    CHECK: (pincode) => `/delivery/check/${pincode}`,
+    CHECK: (pincode) => byId("/delivery/check", pincode),
   },
 
-  // ======================
-  // UPLOADS
-  // ======================
   UPLOADS: {
     MULTIPLE: build("/uploads/multiple"),
-    SINGLE: build("/uploads/single"), // 🔥 added (you used it elsewhere)
+    SINGLE: build("/uploads/single"),
   },
 
-  // ======================
-  // CONFIG / CMS
-  // ======================
   CONFIG: build("/config"),
 
   CMS: {
     SITE_CONTENT: build("/site-content"),
   },
 
-  // ======================
-  // 🔥 ADMIN (IMPORTANT)
-  // ======================
+  CATEGORIES: {
+    BASE: build("/categories"),
+    GET: (id) => byId("/categories", id),
+  },
+
   ADMIN: {
+    DASHBOARD: build("/admin/dashboard"),
+    NOTIFICATIONS: build("/admin/notifications"),
+    PAY: build("/admin/pay"),
+
     ANALYTICS: {
       OVERVIEW: build("/admin/stats"),
-      TRAFFIC: build("/admin/revenue/trend"),
-      TOP_PRODUCTS: build("/admin/stats"), // Reuse main stats if specific one doesn't exist
-      ACTIVE_USERS: build("/admin/customers/stats"),
-      HEALTH: build("/admin/stats"),
+      TRAFFIC: build("/admin/orders/trend"),
+      REVENUE_TREND: build("/admin/revenue/trend"),
+      TOP_PRODUCTS: build("/admin/products"),
+      ACTIVE_USERS: build("/admin/analytics/active-users"),
+      HEALTH: build("/admin/analytics/health"),
     },
 
     PRODUCTS: {
       BASE: build("/admin/products"),
-      GET: (id) => `/admin/products/${id}`,
+      GET: (id) => byId("/admin/products", id),
+      STATUS: (id) => `${byId("/admin/products", id)}/status`,
     },
 
     ORDERS: {
       BASE: build("/admin/orders"),
-      STATUS: (id) => `/admin/orders/${id}/status`,
+      GET: (id) => byId("/admin/orders", id),
+      STATUS: (id) => `${byId("/admin/orders", id)}/status`,
+      PAYMENT: (id) => `${byId("/admin/orders", id)}/payment`,
+      INVOICE: (id) => `${byId("/admin/orders", id)}/invoice`,
+      TREND: build("/admin/orders/trend"),
     },
 
     USERS: {
       BASE: build("/admin/users"),
+      GET: (id) => byId("/admin/users", id),
     },
 
     OFFERS: {
       BASE: build("/admin/offers"),
-      GET: (id) => `/admin/offers/${id}`,
+      GET: (id) => byId("/admin/offers", id),
+    },
+
+    SHIPMENTS: {
+      BASE: build("/admin/shipments"),
+      GET: (id) => byId("/admin/shipments", id),
+    },
+
+    CATEGORIES: {
+      BASE: build("/admin/categories"),
+      GET: (id) => byId("/admin/categories", id),
     },
 
     REVIEWS: {
       BASE: build("/reviews/admin"),
-      APPROVE: (id) => `/reviews/admin/${id}/approve`,
-      DELETE: (id) => `/reviews/admin/${id}`,
+      APPROVE: (id) => `${byId("/reviews/admin", id)}/approve`,
+      DELETE: (id) => byId("/reviews/admin", id),
     },
+
+    SITE_CONTENT: build("/site-content"),
+    CONFIG: build("/config"),
   },
 };

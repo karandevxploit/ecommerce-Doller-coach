@@ -2,12 +2,14 @@
 
 /* ---------------- CORE HOOKS ---------------- */
 export { useForm } from "./useForm";
-export { useAutoLogout } from "./useAutoLogout";
-export { useRealtime } from "./useRealtime";
+export { default as useAutoLogout } from "./useAutoLogout";
 export { useSafeInterval } from "./useSafeInterval";
+export { useProductData } from "./useProductData";
 
-/* ---------------- OPTIONAL DEFAULT EXPORTS (for flexibility) ---------------- */
-export { default as useFormHook } from "./useForm";
-export { default as useAutoLogoutHook } from "./useAutoLogout";
-export { default as useRealtimeHook } from "./useRealtime";
-export { default as useSafeIntervalHook } from "./useSafeInterval";
+/* ---------------- ACTION / AUTH HELPERS ---------------- */
+export { useActionGuard } from "./useActionGuard";
+
+/* ---------------- OPTIONAL FUTURE HOOKS ---------------- */
+// export { default as useDebounce } from "./useDebounce";
+// export { default as useMediaQuery } from "./useMediaQuery";
+// export { default as useClickOutside } from "./useClickOutside";

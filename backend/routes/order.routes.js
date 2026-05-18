@@ -12,6 +12,11 @@ const {
   getMyOrders,
   downloadInvoice,
   canUserReview,
+  verifyPayment,
+  confirmOrder,
+  updateOrderStatus,
+  updatePaymentStatus,
+  exportOrders,
 } = require("../controllers/order.controller");
 
 const idempotency = require("../middlewares/idempotency.middleware");
@@ -49,6 +54,12 @@ router.post(
   validate(createOrderSchema, "body"),
   safeHandler(async (req, res, next) => {
     try {
+      logger.info("ORDER_CREATE_REQUEST", {
+        userId: req.user?.id || req.user?._id,
+        hasIdempotencyKey: Boolean(req.headers["x-idempotency-key"]),
+        itemCount: Array.isArray(req.body?.products) ? req.body.products.length : 0,
+      });
+      
       const result = await createOrder(req, res);
 
       if (!res.headersSent) {
@@ -83,6 +94,49 @@ router.get(
   isAdmin,
   apiLimiter,
   safeHandler(getOrders)
+);
+
+router.put(
+  "/:id/status",
+  protect,
+  isAdmin,
+  apiLimiter,
+  validateObjectId,
+  safeHandler(updateOrderStatus)
+);
+
+router.post(
+  "/:id/confirm",
+  protect,
+  isAdmin,
+  apiLimiter,
+  validateObjectId,
+  safeHandler(confirmOrder)
+);
+
+router.put(
+  "/:id/payment-status",
+  protect,
+  isAdmin,
+  apiLimiter,
+  validateObjectId,
+  safeHandler(updatePaymentStatus)
+);
+
+router.post(
+  "/verify-payment",
+  protect,
+  apiLimiter,
+  idempotency,
+  safeHandler(verifyPayment)
+);
+
+router.get(
+  "/admin/export",
+  protect,
+  isAdmin,
+  apiLimiter,
+  safeHandler(exportOrders)
 );
 
 /**

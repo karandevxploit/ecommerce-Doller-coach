@@ -1,53 +1,45 @@
 import { QueryClient } from "@tanstack/react-query";
 
-/**
- * PRODUCTION-GRADE QUERY CLIENT
- * - Balanced caching strategy
- * - Smart retry logic
- * - Better UX (no unnecessary refetch spam)
- * - Error-aware retries
- */
+const isCancelledRequest = (error) => {
+  return (
+    error?.code === "ERR_CANCELED" ||
+    error?.name === "CanceledError" ||
+    error?.name === "AbortError"
+  );
+};
 
 const shouldRetry = (failureCount, error) => {
+  if (isCancelledRequest(error)) return false;
+
   const status = error?.response?.status;
 
-  // ❌ Do NOT retry on client errors (bad request, unauthorized, forbidden)
-  if (status && [400, 401, 403, 404].includes(status)) return false;
+  if (status && [400, 401, 403, 404, 409, 422, 429].includes(status)) {
+    return false;
+  }
 
-  // ❌ Do NOT retry on rate limit
-  if (status === 429) return false;
-
-  // ✅ Retry network / server errors (max 2 times)
   return failureCount < 2;
+};
+
+const retryDelay = (attemptIndex) => {
+  return Math.min(1000 * 2 ** attemptIndex, 8000);
 };
 
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // ✅ Better caching (less API spam)
-      staleTime: 1000 * 60 * 2, // 2 minutes
-      gcTime: 1000 * 60 * 15,   // 15 minutes
-
-      // ❌ Avoid unnecessary refetch on tab switch
+      staleTime: 1000 * 60 * 2,
+      gcTime: 1000 * 60 * 15,
+      cacheTime: 1000 * 60 * 15,
       refetchOnWindowFocus: false,
-
-      // ✅ Retry intelligently
-      retry: shouldRetry,
-
-      retryDelay: (attemptIndex) =>
-        Math.min(1000 * 2 ** attemptIndex, 8000),
-
-      // ✅ Improve UX
       refetchOnReconnect: true,
       refetchOnMount: false,
-
-      // ✅ Prevent unnecessary rerenders
+      retry: shouldRetry,
+      retryDelay,
       notifyOnChangeProps: "tracked",
     },
 
     mutations: {
-      // ❌ Avoid retrying mutations (dangerous for POST/PUT)
-      retry: 0,
+      retry: false,
     },
   },
 });

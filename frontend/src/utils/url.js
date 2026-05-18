@@ -1,97 +1,219 @@
 /**
- * IMAGE URL RESOLVER (Cloudinary + Production Ready)
+ * IMAGE URL RESOLVER (Local uploads + Production Ready)
  * - Handles absolute, relative, array, object formats
- * - Adds Cloudinary optimizations
  * - SSR safe
  * - Prevents broken images
  */
 
 /* ---------------- FALLBACK ---------------- */
-const INTERNAL_FALLBACK =
-  "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNTAwIiB2aWV3Qm94PSIwIDAgNDAwIDUwMCI+PHJlY3Qgd2lkdGg9IjQwMCIgaGVpZ2h0PSI1MDAiIGZpbGw9IiNmMWY1ZjkiLz48dGV4dCB4PSI1MCUiIHk9IjUwJSIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjEyIiBmaWxsPSIjOTRhM2I4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSI+Tk8gSU1BR0U8L3RleHQ+PC9zdmc+";
+export const INTERNAL_FALLBACK = "/uploads/products/default-product.webp";
 
 /* ---------------- ENV SAFE ---------------- */
-const getServerUrl = () => {
+export const getServerUrl = () => {
   try {
-    const base =
+    const configured =
+      import.meta?.env?.VITE_PUBLIC_BACKEND_URL ||
       import.meta?.env?.VITE_API_URL ||
-      "http://localhost:8001/api";
-    return base.replace("/api", "");
+      "";
+    const normalizedConfigured = String(configured || "")
+      .trim()
+      .replace(/\/api\/?$/, "")
+      .replace(/\/$/, "");
+
+    if (typeof window === "undefined") {
+      return normalizedConfigured || "";
+    }
+
+    const currentOrigin = window.location.origin;
+    const currentHost = window.location.hostname;
+    const isCurrentLocal =
+      currentHost === "localhost" ||
+      currentHost === "127.0.0.1" ||
+      currentHost === "::1";
+
+    if (normalizedConfigured) {
+      const configuredUrl = new URL(normalizedConfigured, currentOrigin);
+      const configuredHost = configuredUrl.hostname;
+      const isConfiguredLocal =
+        configuredHost === "localhost" ||
+        configuredHost === "127.0.0.1" ||
+        configuredHost === "::1";
+
+      if (!isConfiguredLocal || isCurrentLocal) {
+        return configuredUrl.origin;
+      }
+    }
+
+    return currentOrigin;
   } catch {
     return "";
   }
 };
 
 /* ---------------- VALID URL ---------------- */
-const isValidUrl = (url) =>
-  typeof url === "string" &&
-  (url.startsWith("http://") ||
-    url.startsWith("https://"));
+export const isValidUrl = (url) => {
+  if (typeof url !== "string") return false;
 
-/* ---------------- CLOUDINARY OPTIMIZER ---------------- */
-const optimizeCloudinary = (url) => {
-  if (!url.includes("res.cloudinary.com")) return url;
+  return (
+    url.startsWith("http://") ||
+    url.startsWith("https://") ||
+    url.startsWith("data:image/") ||
+    url.startsWith("blob:")
+  );
+};
 
-  // Add automatic optimization if not already present
-  if (url.includes("/upload/") && !url.includes("f_auto")) {
-    return url.replace(
-      "/upload/",
-      "/upload/f_auto,q_auto/"
+/* ---------------- EXTRACT URL FROM INPUT ---------------- */
+export const extractUrl = (input) => {
+  if (!input) return "";
+
+  if (typeof input === "string") return input.trim();
+
+  if (Array.isArray(input)) {
+    const firstUsable =
+      input.find((item) => isValidUrl(extractUrl(item))) ||
+      input.find(Boolean);
+
+    return extractUrl(firstUsable);
+  }
+
+  if (typeof input === "object") {
+    return (
+      input.url ||
+      input.secure_url ||
+      input.imageUrl ||
+      input.src ||
+      input.path ||
+      input.thumbnail ||
+      input.preview ||
+      ""
     );
   }
 
-  return url;
+  return "";
+};
+
+/* ---------------- STATIC / LOCAL ASSET ---------------- */
+const isStaticAsset = (path) => {
+  if (typeof path !== "string") return false;
+
+  return (
+    path.startsWith("/src/") ||
+    path.startsWith("/@fs/") ||
+    path.startsWith("/assets/") ||
+    path.startsWith("data:") ||
+    path.startsWith("blob:")
+  );
 };
 
 /* ---------------- MAIN RESOLVER ---------------- */
 export const resolveImageUrl = (input) => {
-  if (!input) return INTERNAL_FALLBACK;
+  const rawPath = extractUrl(input);
 
-  let path = input;
+  if (!rawPath) return INTERNAL_FALLBACK;
 
-  /* ---------- ARRAY SUPPORT ---------- */
-  if (Array.isArray(input)) {
-    path = input.find(isValidUrl) || input[0];
-  }
-
-  /* ---------- OBJECT SUPPORT ---------- */
-  if (typeof path === "object" && path !== null) {
-    path = path.url || path.secure_url || "";
-  }
+  const path = String(rawPath).trim();
 
   if (!path) return INTERNAL_FALLBACK;
 
-  /* ---------- ABSOLUTE URL ---------- */
+  if (path.startsWith("/placeholder")) return INTERNAL_FALLBACK;
+
+  /* ---------- ABSOLUTE URL / DATA / BLOB ---------- */
   if (isValidUrl(path)) {
-    return optimizeCloudinary(path);
+    try {
+      const parsed = new URL(path);
+      const isLocalBackend =
+        (parsed.hostname === "localhost" ||
+          parsed.hostname === "127.0.0.1" ||
+          parsed.hostname === "::1") &&
+        parsed.pathname.startsWith("/uploads/");
+
+      if (isLocalBackend) {
+        const server = getServerUrl();
+        return server ? `${server}${parsed.pathname}${parsed.search}` : parsed.pathname;
+      }
+    } catch {
+      // Fall through to original URL handling.
+    }
+
+    return path;
   }
 
-  /* ---------- RELATIVE PATH ---------- */
+  /* ---------- VITE / PUBLIC ASSET ---------- */
+  if (isStaticAsset(path)) {
+    return path;
+  }
+
+  /* ---------- LOCAL UPLOADS ---------- */
+  if (path.startsWith("/uploads/")) {
+    const server = getServerUrl();
+    return server ? `${server}${path}` : path;
+  }
+  if (path.startsWith("uploads/")) {
+    const server = getServerUrl();
+    return server ? `${server}/${path}` : `/${path}`;
+  }
+
+  /* ---------- RELATIVE PATH (BACKEND) ---------- */
   const server = getServerUrl();
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  
-  return server
-    ? `${server}${normalizedPath}`
-    : INTERNAL_FALLBACK;
+
+  return server ? `${server}${normalizedPath}` : INTERNAL_FALLBACK;
+};
+
+export const FALLBACK_IMAGE_URL = resolveImageUrl(INTERNAL_FALLBACK);
+
+/* ---------------- VIDEO URL RESOLVER ---------------- */
+export const resolveVideoUrl = (input) => {
+  const rawPath = extractUrl(input);
+
+  if (!rawPath) return "";
+
+  const path = String(rawPath).trim();
+
+  if (isValidUrl(path)) {
+    try {
+      const parsed = new URL(path);
+      const isLocalBackend =
+        (parsed.hostname === "localhost" ||
+          parsed.hostname === "127.0.0.1" ||
+          parsed.hostname === "::1") &&
+        parsed.pathname.startsWith("/uploads/");
+
+      if (isLocalBackend) {
+        const server = getServerUrl();
+        return server ? `${server}${parsed.pathname}${parsed.search}` : parsed.pathname;
+      }
+    } catch {
+      // Fall through to original URL handling.
+    }
+
+    return path;
+  }
+
+  const server = getServerUrl();
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+
+  return server ? `${server}${normalizedPath}` : "";
 };
 
 /* ---------------- VIDEO POSTER ---------------- */
-export const getVideoPoster = (url) => {
-  if (!url) return INTERNAL_FALLBACK;
-  if (!url.includes("res.cloudinary.com")) return INTERNAL_FALLBACK;
+export const getVideoPoster = (input) => {
+  const url = resolveVideoUrl(input);
 
-  // Cloudinary trick: Change extension to .jpg and add so_auto (start offset auto)
-  return url
-    .replace(/\.[^/.]+$/, ".jpg")
-    .replace("/upload/", "/upload/f_auto,q_auto,so_auto/");
+  if (!url) return FALLBACK_IMAGE_URL;
+
+  return FALLBACK_IMAGE_URL;
 };
 
 /* ---------------- IMAGE ERROR HANDLER ---------------- */
 export const handleImageError = (e) => {
-  if (!e?.target) return;
+  const target = e?.currentTarget || e?.target;
+  if (!target) return;
 
-  if (e.target.dataset.fallback) return;
+  if (target.dataset.fallback === "true") return;
 
-  e.target.src = INTERNAL_FALLBACK;
-  e.target.dataset.fallback = "true";
+  target.dataset.fallback = "true";
+  target.src = FALLBACK_IMAGE_URL;
 };
+
+export default resolveImageUrl;

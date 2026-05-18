@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -8,57 +9,53 @@ export default function SectionWrapper({
   viewAllPath = "/collection",
   viewAllText = "View all",
   bgColor = "bg-white",
-  padding = "py-16 lg:py-24",
-  hideViewAll = false
+  padding = "py-7 md:py-12",
+  hideViewAll = false,
 }) {
+  const headingId = useId();
   const safeTitle = title || "Section";
   const safeSubtitle = subtitle || "";
+  const safeViewAllText = viewAllText || "View all";
 
   return (
-    <section className={`${bgColor} ${padding}`} aria-labelledby="section-heading">
-      <div className="container-responsive space-y-10 lg:space-y-16">
-
-        {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-
-          <div className="space-y-2 max-w-2xl">
+    <section className={`${bgColor} ${padding}`} aria-labelledby={headingId}>
+      <div className="container-responsive space-y-4 md:space-y-5 lg:space-y-6">
+        <div className="flex items-end justify-between gap-4">
+          <div className="space-y-1.5 md:space-y-2 max-w-2xl">
             {safeSubtitle && (
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
+              <span className="text-[10px] md:text-xs font-semibold text-slate-500 uppercase tracking-widest">
                 {safeSubtitle}
               </span>
             )}
 
             <h2
-              id="section-heading"
-              className="text-2xl md:text-4xl lg:text-5xl font-bold text-slate-900 leading-tight"
+              id={headingId}
+              className="text-xl md:text-3xl lg:text-4xl font-black text-slate-900 leading-tight uppercase tracking-tight"
             >
               {safeTitle}
             </h2>
           </div>
 
-          {/* View All */}
           {!hideViewAll && viewAllPath && (
             <Link
               to={viewAllPath}
               aria-label={`View all ${safeTitle}`}
-              className="inline-flex items-center gap-2 text-sm font-medium text-slate-700 hover:text-indigo-600 transition"
+              className="group inline-flex shrink-0 items-center gap-1 text-[10px] md:text-sm font-black uppercase tracking-widest text-slate-700 hover:text-indigo-600 transition"
             >
-              {viewAllText}
-              <ChevronRight size={16} className="transition-transform group-hover:translate-x-1" />
+              {safeViewAllText}
+              <ChevronRight
+                size={16}
+                className="transition-transform group-hover:translate-x-1"
+              />
             </Link>
           )}
-
         </div>
 
-        {/* Content */}
         <div className="relative w-full">
           {children || (
-            <div className="text-sm text-slate-400">
-              No content available.
-            </div>
+            <div className="text-sm text-slate-400">No content available.</div>
           )}
         </div>
-
       </div>
     </section>
   );

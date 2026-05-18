@@ -67,4 +67,11 @@ router.delete(
   safeHandler(deleteReview)
 );
 
+router.get(
+  "/:productId",
+  authLimiter,
+  cacheRoute(300),
+  safeHandler(getProductReviews)
+);
+
 module.exports = router;

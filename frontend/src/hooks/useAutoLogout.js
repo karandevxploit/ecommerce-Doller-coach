@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 
 /**
@@ -8,38 +8,89 @@ import { useNavigate } from "react-router-dom";
 export default function useAutoLogout({
   timeout = 2 * 60 * 60 * 1000, // 2 hours
   redirectTo = "/admin/login",
-  storageKeys = ["adminToken", "adminUser", "token", "auth-storage"]
+  storageKeys = ["adminToken", "adminUser", "token", "auth-storage"],
 } = {}) {
   const navigate = useNavigate();
+
   const timerRef = useRef(null);
   const lastActivityRef = useRef(Date.now());
 
+  const safeStorageKeys = useMemo(() => {
+    return Array.isArray(storageKeys)
+      ? storageKeys.filter(Boolean)
+      : ["adminToken", "adminUser", "token", "auth-storage"];
+  }, [storageKeys]);
+
+  const clearTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
   /* ---------------- LOGOUT ---------------- */
   const logout = useCallback(() => {
-    storageKeys.forEach((key) => localStorage.removeItem(key));
+    clearTimer();
 
-    // Notify other tabs
-    localStorage.setItem("logout-event", Date.now());
+    try {
+      safeStorageKeys.forEach((key) => localStorage.removeItem(key));
+      localStorage.setItem("logout-event", String(Date.now()));
+    } catch {
+      // Storage can fail in private mode. Redirect should still happen.
+    }
 
     navigate(redirectTo, { replace: true });
-  }, [navigate, redirectTo, storageKeys]);
+  }, [clearTimer, navigate, redirectTo, safeStorageKeys]);
 
   /* ---------------- RESET TIMER (THROTTLED) ---------------- */
-  const resetTimer = useCallback(() => {
+  const resetTimer = useCallback(
+    (force = false) => {
+      const now = Date.now();
+
+      // throttle: ignore too frequent events
+      if (!force && now - lastActivityRef.current < 1000) return;
+
+      lastActivityRef.current = now;
+
+      try {
+        localStorage.setItem("last-activity", String(now));
+      } catch {
+        // Ignore storage errors.
+      }
+
+      clearTimer();
+      timerRef.current = setTimeout(logout, timeout);
+    },
+    [clearTimer, logout, timeout]
+  );
+
+  const checkExpired = useCallback(() => {
     const now = Date.now();
 
-    // throttle: ignore too frequent events
-    if (now - lastActivityRef.current < 1000) return;
+    let lastActivity = lastActivityRef.current;
 
-    lastActivityRef.current = now;
+    try {
+      const stored = Number(localStorage.getItem("last-activity"));
+      if (Number.isFinite(stored) && stored > 0) {
+        lastActivity = stored;
+      }
+    } catch {
+      // Ignore storage errors.
+    }
 
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(logout, timeout);
+    if (now - lastActivity >= timeout) {
+      logout();
+      return true;
+    }
+
+    return false;
   }, [logout, timeout]);
 
   /* ---------------- EFFECT ---------------- */
   useEffect(() => {
-    resetTimer();
+    if (!Number.isFinite(timeout) || timeout <= 0) return undefined;
+
+    resetTimer(true);
 
     const events = ["mousemove", "keydown", "click", "scroll", "touchstart"];
 
@@ -48,9 +99,14 @@ export default function useAutoLogout({
     );
 
     /* ---------------- TAB SYNC ---------------- */
-    const handleStorage = (e) => {
-      if (e.key === "logout-event") {
+    const handleStorage = (event) => {
+      if (event.key === "logout-event") {
+        clearTimer();
         navigate(redirectTo, { replace: true });
+      }
+
+      if (event.key === "last-activity") {
+        resetTimer(true);
       }
     };
 
@@ -59,14 +115,16 @@ export default function useAutoLogout({
     /* ---------------- VISIBILITY CHANGE ---------------- */
     const handleVisibility = () => {
       if (document.visibilityState === "visible") {
-        resetTimer();
+        if (!checkExpired()) {
+          resetTimer(true);
+        }
       }
     };
 
     document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+      clearTimer();
 
       events.forEach((event) =>
         window.removeEventListener(event, resetTimer)
@@ -75,7 +133,14 @@ export default function useAutoLogout({
       window.removeEventListener("storage", handleStorage);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [resetTimer, navigate, redirectTo]);
+  }, [
+    timeout,
+    resetTimer,
+    clearTimer,
+    checkExpired,
+    navigate,
+    redirectTo,
+  ]);
 
-  return { resetTimer };
+  return { resetTimer, logout };
 }

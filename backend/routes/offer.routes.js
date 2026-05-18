@@ -4,7 +4,6 @@ const mongoose = require("mongoose");
 const { safeHandler } = require("../middlewares/error.middleware");
 const { protect, authorize } = require("../middlewares/auth.middleware");
 const { authLimiter } = require("../middlewares/rateLimiter.v2");
-const { logger } = require("../utils/logger");
 
 const {
     getActiveOffers,
@@ -38,21 +37,7 @@ const publicLimiter = authLimiter;
 router.get(
     "/",
     publicLimiter,
-    safeHandler(async (req, res, next) => {
-        try {
-            const result = await getActiveOffers(req, res);
-
-            if (!res.headersSent) {
-                res.setHeader("Cache-Control", "public, max-age=60");
-                res.json({ success: true, data: result });
-            }
-        } catch (err) {
-            logger.error("OFFERS_FETCH_FAILED", {
-                error: err.message,
-            });
-            next(err);
-        }
-    })
+    safeHandler(getActiveOffers)
 );
 
 /**
@@ -63,21 +48,7 @@ router.post(
     protect,
     authorize("admin"),
     authLimiter,
-    safeHandler(async (req, res, next) => {
-        try {
-            const result = await createOffer(req, res);
-
-            if (!res.headersSent) {
-                res.json({ success: true, data: result });
-            }
-        } catch (err) {
-            logger.error("OFFER_CREATE_FAILED", {
-                adminId: req.user?.id,
-                error: err.message,
-            });
-            next(err);
-        }
-    })
+    safeHandler(createOffer)
 );
 
 /**
@@ -89,22 +60,7 @@ router.put(
     authorize("admin"),
     authLimiter,
     validateObjectId,
-    safeHandler(async (req, res, next) => {
-        try {
-            const result = await updateOffer(req, res);
-
-            if (!res.headersSent) {
-                res.json({ success: true, data: result });
-            }
-        } catch (err) {
-            logger.error("OFFER_UPDATE_FAILED", {
-                adminId: req.user?.id,
-                offerId: req.params.id,
-                error: err.message,
-            });
-            next(err);
-        }
-    })
+    safeHandler(updateOffer)
 );
 
 /**
@@ -116,22 +72,7 @@ router.delete(
     authorize("admin"),
     authLimiter,
     validateObjectId,
-    safeHandler(async (req, res, next) => {
-        try {
-            const result = await deleteOffer(req, res);
-
-            if (!res.headersSent) {
-                res.json({ success: true, data: result });
-            }
-        } catch (err) {
-            logger.error("OFFER_DELETE_FAILED", {
-                adminId: req.user?.id,
-                offerId: req.params.id,
-                error: err.message,
-            });
-            next(err);
-        }
-    })
+    safeHandler(deleteOffer)
 );
 
 module.exports = router;

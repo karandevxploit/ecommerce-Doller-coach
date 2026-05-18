@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 
 /**
  * useSafeInterval
@@ -12,12 +12,17 @@ import { useEffect, useRef, useCallback } from "react";
 export const useSafeInterval = (
   callback,
   delay,
-  { immediate = false } = {}
+  { immediate = false, pauseOnHidden = true } = {}
 ) => {
   const savedCallback = useRef(callback);
   const intervalRef = useRef(null);
-  const isRunning = useRef(false);
-  const isExecuting = useRef(false);
+  const isExecutingRef = useRef(false);
+  const shouldRunRef = useRef(false);
+
+  const [isRunning, setIsRunning] = useState(false);
+
+  const isValidDelay =
+    typeof delay === "number" && Number.isFinite(delay) && delay >= 0;
 
   /* ---------------- STORE LATEST CALLBACK ---------------- */
   useEffect(() => {
@@ -26,46 +31,72 @@ export const useSafeInterval = (
 
   /* ---------------- EXECUTION ---------------- */
   const tick = useCallback(async () => {
-    if (!savedCallback.current || isExecuting.current) return;
+    if (typeof savedCallback.current !== "function") return;
+    if (isExecutingRef.current) return;
 
-    isExecuting.current = true;
+    isExecutingRef.current = true;
 
     try {
       await savedCallback.current();
     } catch (err) {
       console.error("[useSafeInterval] Execution error:", err);
     } finally {
-      isExecuting.current = false;
+      isExecutingRef.current = false;
     }
   }, []);
 
-  /* ---------------- START ---------------- */
-  const start = useCallback(() => {
-    if (intervalRef.current || delay === null) return;
-
-    isRunning.current = true;
-
-    intervalRef.current = setInterval(tick, delay);
-  }, [delay, tick]);
-
-  /* ---------------- STOP ---------------- */
-  const stop = useCallback(() => {
-    isRunning.current = false;
-
+  /* ---------------- CLEAR ---------------- */
+  const clear = useCallback(() => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
   }, []);
 
+  /* ---------------- START ---------------- */
+  const start = useCallback(() => {
+    if (!isValidDelay) return;
+
+    shouldRunRef.current = true;
+
+    if (pauseOnHidden && typeof document !== "undefined" && document.hidden) {
+      setIsRunning(false);
+      return;
+    }
+
+    if (intervalRef.current) {
+      setIsRunning(true);
+      return;
+    }
+
+    intervalRef.current = setInterval(tick, delay);
+    setIsRunning(true);
+  }, [delay, isValidDelay, pauseOnHidden, tick]);
+
+  /* ---------------- STOP ---------------- */
+  const stop = useCallback(() => {
+    shouldRunRef.current = false;
+    clear();
+    setIsRunning(false);
+  }, [clear]);
+
+  /* ---------------- RUN NOW ---------------- */
+  const runNow = useCallback(() => {
+    return tick();
+  }, [tick]);
+
   /* ---------------- VISIBILITY HANDLING ---------------- */
   useEffect(() => {
-    if (typeof document === "undefined") return; // SSR safe
+    if (!pauseOnHidden || typeof document === "undefined") return undefined;
 
     const handleVisibility = () => {
       if (document.hidden) {
-        stop();
-      } else if (!intervalRef.current && isRunning.current) {
+        clear();
+        setIsRunning(false);
+        return;
+      }
+
+      if (shouldRunRef.current) {
         start();
       }
     };
@@ -75,21 +106,35 @@ export const useSafeInterval = (
     return () => {
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [start, stop]);
+  }, [pauseOnHidden, clear, start]);
 
   /* ---------------- INIT ---------------- */
   useEffect(() => {
-    if (delay === null) return;
+    if (!isValidDelay) {
+      stop();
+      return undefined;
+    }
 
-    if (immediate) tick();
+    shouldRunRef.current = true;
+
+    if (immediate) {
+      tick();
+    }
+
     start();
 
-    return () => stop();
-  }, [delay, immediate, start, stop, tick]);
+    return () => {
+      clear();
+      setIsRunning(false);
+    };
+  }, [isValidDelay, immediate, start, stop, clear, tick]);
 
   return {
     start,
     stop,
-    isRunning: isRunning.current
+    runNow,
+    isRunning,
   };
 };
+
+export default useSafeInterval;

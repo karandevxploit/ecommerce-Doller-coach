@@ -28,7 +28,7 @@ async function simulate() {
 
     // 3. Login
     // (Assuming email verification is bypassed or not strictly enforced for this simulation)
-    // Actually, we'll just test if the auth controller handles it correctly.
+    // Exercise the login route through the active auth stack.
     console.log("Simulation complete. Manual verification of code changes is recommended.");
     
   } catch (err) {

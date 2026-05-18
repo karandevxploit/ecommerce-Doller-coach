@@ -7,22 +7,65 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Builds
+dist/
+dist-ssr/
+build/
+frontend/build/
+frontend/dist/
+backend/dist/
+coverage/
+
+# Env / local config
+.env
+.env.*
+!.env.example
 *.local
+
+# Backend runtime files
 backend/uploads/
 backend/logs/
 backend/scratch/
+backend/tmp/
+backend/temp/
+
+# Frontend generated files
 frontend/build_error.txt
+
+# Cache
+.cache/
+.vite/
+.eslintcache
+.stylelintcache
+.turbo/
+.next/
+.nitro/
+.output/
+
+# OS files
+.DS_Store
+Thumbs.db
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+.idea/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# Test artifacts
+playwright-report/
+test-results/
+
+# Misc
+*.bak
+*.tmp
+*.temp

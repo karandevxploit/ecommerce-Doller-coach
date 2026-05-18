@@ -1,26 +1,21 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   MapContainer,
   TileLayer,
   Marker,
   useMapEvents,
-  useMap
+  useMap,
 } from "react-leaflet";
 import L from "leaflet";
 import {
-  MapPin,
   Navigation,
   Loader2,
   CheckCircle2,
-  AlertCircle,
-  Home,
-  Briefcase,
-  Search
+  Search,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { api } from "../../api/client";
 
-// Leaflet fix for default icon
 import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
 
@@ -28,36 +23,177 @@ const DefaultIcon = L.icon({
   iconUrl: markerIcon,
   shadowUrl: markerShadow,
   iconSize: [25, 41],
-  iconAnchor: [12, 41]
+  iconAnchor: [12, 41],
 });
+
 L.Marker.prototype.options.icon = DefaultIcon;
 
-const INDIA_CENTER = [28.6139, 77.2090]; // New Delhi
+const INDIA_CENTER = [28.6139, 77.209];
 
-const SmartCheckoutAddress = ({ onAddressComplete }) => {
-  const [form, setForm] = useState({
-    name: "",
-    phone: "",
-    address: "",
-    city: "",
-    state: "",
-    pincode: "",
-    lat: INDIA_CENTER[0],
-    lng: INDIA_CENTER[1]
-  });
+const initialForm = {
+  name: "",
+  phone: "",
+  address: "",
+  city: "",
+  state: "",
+  pincode: "",
+  lat: INDIA_CENTER[0],
+  lng: INDIA_CENTER[1],
+};
 
+const safeNumber = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const isValidAddress = (form) => {
+  return (
+    form.name.trim() &&
+    form.phone.replace(/\D/g, "").length === 10 &&
+    form.address.trim() &&
+    form.city.trim() &&
+    form.state.trim() &&
+    form.pincode.replace(/\D/g, "").length === 6
+  );
+};
+
+const buildPayload = (form) => ({
+  fullName: form.name.trim(),
+  phone: form.phone.trim(),
+  addressLine1: form.address.trim(),
+  city: form.city.trim(),
+  state: form.state.trim(),
+  pincode: form.pincode.trim(),
+  latitude: safeNumber(form.lat, INDIA_CENTER[0]),
+  longitude: safeNumber(form.lng, INDIA_CENTER[1]),
+});
+
+export default function SmartCheckoutAddress({ onAddressComplete = () => { } }) {
+  const [form, setForm] = useState(initialForm);
+  const [saving, setSaving] = useState(false);
+  const [fetching, setFetching] = useState(false);
   const [loading, setLoading] = useState(false);
   const [detected, setDetected] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
-  /* ---------------- AUTO DETECT ---------------- */
+  const valid = useMemo(() => isValidAddress(form), [form]);
+
+  const updateForm = useCallback((patch) => {
+    setForm((prev) => ({ ...prev, ...patch }));
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const fetchSavedAddress = async () => {
+      setFetching(true);
+
+      try {
+        const res = await api.get("/address");
+        const addr = res?.data?.data || res?.data?.address || res?.data;
+
+        if (!mounted || !addr) return;
+
+        updateForm({
+          name: addr.fullName || addr.name || "",
+          phone: String(addr.phone || "").replace(/\D/g, "").slice(0, 10),
+          address: addr.addressLine1 || addr.address || "",
+          city: addr.city || "",
+          state: addr.state || "",
+          pincode: String(addr.pincode || "").replace(/\D/g, "").slice(0, 6),
+          lat: safeNumber(addr.latitude, INDIA_CENTER[0]),
+          lng: safeNumber(addr.longitude, INDIA_CENTER[1]),
+        });
+      } catch (err) {
+        console.error("ADDRESS_FETCH_ERROR:", err?.response?.data || err?.message);
+      } finally {
+        if (mounted) setFetching(false);
+      }
+    };
+
+    fetchSavedAddress();
+
+    return () => {
+      mounted = false;
+    };
+  }, [updateForm]);
+
+  const saveToBackend = useCallback(async (data) => {
+    try {
+      setSaving(true);
+      await api.post("/address", data);
+    } catch (err) {
+      console.error("ADDRESS_SAVE_ERROR:", err?.response?.data || err?.message);
+    } finally {
+      setSaving(false);
+    }
+  }, []);
+
+  const handlePincodeChange = async (value) => {
+    const pin = value.replace(/\D/g, "").slice(0, 6);
+    updateForm({ pincode: pin });
+
+    if (pin.length !== 6) return;
+
+    try {
+      const res = await fetch(`https://api.postalpincode.in/pincode/${pin}`);
+      const data = await res.json();
+
+      if (data?.[0]?.Status === "Success" && data?.[0]?.PostOffice?.[0]) {
+        const info = data[0].PostOffice[0];
+
+        updateForm({
+          city: info.District || "",
+          state: info.State || "",
+        });
+
+        toast.success(`Detected ${info.District}, ${info.State}`);
+      }
+    } catch (err) {
+      console.error("PINCODE_LOOKUP_ERROR:", err);
+    }
+  };
+
+  const handleMapClick = useCallback(
+    async (lat, lng) => {
+      updateForm({ lat, lng });
+
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`
+        );
+        const data = await res.json();
+
+        if (data?.address) {
+          const address = data.address;
+
+          updateForm({
+            address: address.road || address.suburb || address.neighbourhood || "",
+            city: address.city || address.town || address.village || "",
+            state: address.state || "",
+            pincode: String(address.postcode || "").replace(/\D/g, "").slice(0, 6),
+            lat,
+            lng,
+          });
+        }
+      } catch (err) {
+        console.error("REVERSE_GEOCODE_ERROR:", err);
+      }
+    },
+    [updateForm]
+  );
+
   const detectLocation = () => {
-    if (!navigator.geolocation) return toast.error("Geolocation not supported");
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      toast.error("Geolocation not supported");
+      return;
+    }
 
     setLoading(true);
+
     navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const { latitude, longitude } = pos.coords;
+      async (position) => {
+        const { latitude, longitude } = position.coords;
 
         try {
           const res = await fetch(
@@ -65,17 +201,17 @@ const SmartCheckoutAddress = ({ onAddressComplete }) => {
           );
           const data = await res.json();
 
-          setForm((prev) => ({
-            ...prev,
+          updateForm({
             address: data.locality || data.city || "",
-            city: data.city || "",
+            city: data.city || data.locality || "",
             state: data.principalSubdivision || "",
-            pincode: data.postcode || "",
+            pincode: String(data.postcode || "").replace(/\D/g, "").slice(0, 6),
             lat: latitude,
-            lng: longitude
-          }));
+            lng: longitude,
+          });
+
           setDetected(true);
-          toast.success("Location detected ✅");
+          toast.success("Location detected");
         } catch (err) {
           toast.error("Failed to fetch address details");
         } finally {
@@ -86,81 +222,58 @@ const SmartCheckoutAddress = ({ onAddressComplete }) => {
         setLoading(false);
         toast.error("Permission denied");
       },
-      { timeout: 10000 }
+      { timeout: 10000, enableHighAccuracy: true }
     );
   };
 
-  /* ---------------- MAP SYNC ---------------- */
-  const handleMapClick = async (lat, lng) => {
-    setForm(prev => ({ ...prev, lat, lng }));
-    
-    // Optional: reverse geocode on click
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`);
-      const data = await res.json();
-      if (data?.address) {
-        const a = data.address;
-        setForm(prev => ({
-          ...prev,
-          address: a.road || a.suburb || prev.address,
-          city: a.city || a.town || a.village || prev.city,
-          state: a.state || prev.state,
-          pincode: a.postcode || prev.pincode,
-          lat,
-          lng
-        }));
-      }
-    } catch {}
-  };
+  const handleSearch = async (event) => {
+    event.preventDefault();
 
-  /* ---------------- SEARCH ---------------- */
-  const handleSearch = async (e) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
+    const query = searchQuery.trim();
+    if (!query) return;
 
     try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchQuery)}&format=json&limit=1`);
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+          query
+        )}&format=json&limit=1&countrycodes=in`
+      );
       const data = await res.json();
+
       if (data?.length) {
-        const lat = parseFloat(data[0].lat);
-        const lon = parseFloat(data[0].lon);
-        handleMapClick(lat, lon);
+        const lat = safeNumber(data[0].lat, INDIA_CENTER[0]);
+        const lon = safeNumber(data[0].lon, INDIA_CENTER[1]);
+        await handleMapClick(lat, lon);
+      } else {
+        toast.error("Location not found");
       }
     } catch {
       toast.error("Search failed");
     }
   };
 
-  /* ---------------- VALIDATION ---------------- */
-  const isValid = 
-    form.name.trim() && 
-    form.phone.length >= 10 && 
-    form.address.trim() && 
-    form.city.trim() && 
-    form.state.trim() && 
-    form.pincode.length === 6;
-
   useEffect(() => {
-    if (isValid) {
-      onAddressComplete({
-        fullName: form.name,
-        phone: form.phone,
-        addressLine1: form.address,
-        city: form.city,
-        state: form.state,
-        pincode: form.pincode,
-        latitude: form.lat,
-        longitude: form.lng
-      });
-    } else {
+    if (!valid) {
       onAddressComplete(null);
+      return;
     }
-  }, [form, isValid, onAddressComplete]);
+
+    const payload = buildPayload(form);
+    onAddressComplete(payload);
+
+    const timer = setTimeout(() => {
+      saveToBackend(payload);
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [form, valid, onAddressComplete, saveToBackend]);
 
   return (
-    <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-6">
+    <div className="relative bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-black uppercase tracking-tighter">Delivery Address</h2>
+        <h2 className="text-xl font-black uppercase tracking-tighter">
+          Delivery Address
+        </h2>
         {detected && (
           <span className="flex items-center gap-1 text-[10px] font-bold text-green-600 bg-green-50 px-3 py-1 rounded-full uppercase tracking-widest">
             <CheckCircle2 size={12} /> Location Verified
@@ -169,7 +282,6 @@ const SmartCheckoutAddress = ({ onAddressComplete }) => {
       </div>
 
       <div className="grid md:grid-cols-2 gap-8">
-        {/* LEFT: MAP & AUTO DETECT */}
         <div className="space-y-4">
           <button
             type="button"
@@ -181,49 +293,57 @@ const SmartCheckoutAddress = ({ onAddressComplete }) => {
             {loading ? "Detecting..." : "Use Current Location (1-Click)"}
           </button>
 
-          <div onSubmit={handleSearch} className="relative">
-            <input 
+          <form onSubmit={handleSearch} className="relative">
+            <input
               type="text"
               placeholder="Search for area, landmark..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSearch(e)}
               className="w-full h-12 pl-10 pr-4 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold outline-none focus:border-black transition-all"
             />
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-          </div>
+          </form>
 
-          <div className="h-64 rounded-2xl overflow-hidden border border-slate-100 shadow-inner z-0">
+          <div className="h-[200px] rounded-2xl overflow-hidden border border-slate-100 shadow-inner z-0">
             <MapContainer center={[form.lat, form.lng]} zoom={13} className="h-full w-full">
-              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+              <TileLayer
+                attribution="&copy; OpenStreetMap contributors"
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              />
               <MapController center={[form.lat, form.lng]} />
               <Marker position={[form.lat, form.lng]} />
               <MapEvents onMapClick={handleMapClick} />
             </MapContainer>
           </div>
-          
+
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">
             Tap map to adjust pin precisely
           </p>
         </div>
 
-        {/* RIGHT: MANUAL FORM */}
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Full Name</label>
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                Full Name
+              </label>
               <input
                 value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                onChange={(e) => updateForm({ name: e.target.value })}
                 placeholder="Receiver's name"
                 className="w-full h-12 px-4 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold outline-none focus:border-black transition-all"
               />
             </div>
+
             <div className="space-y-1">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Phone</label>
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                Phone
+              </label>
               <input
                 value={form.phone}
-                onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                onChange={(e) =>
+                  updateForm({ phone: e.target.value.replace(/\D/g, "").slice(0, 10) })
+                }
                 placeholder="10-digit number"
                 className="w-full h-12 px-4 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold outline-none focus:border-black transition-all"
               />
@@ -231,10 +351,12 @@ const SmartCheckoutAddress = ({ onAddressComplete }) => {
           </div>
 
           <div className="space-y-1">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Full Address</label>
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+              Full Address
+            </label>
             <textarea
               value={form.address}
-              onChange={(e) => setForm({ ...form, address: e.target.value })}
+              onChange={(e) => updateForm({ address: e.target.value })}
               placeholder="Flat, House no., Building, Company, Apartment"
               className="w-full h-24 p-4 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold outline-none focus:border-black transition-all resize-none"
             />
@@ -242,19 +364,25 @@ const SmartCheckoutAddress = ({ onAddressComplete }) => {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">City</label>
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                City
+              </label>
               <input
+                list="indiaCities"
                 value={form.city}
-                onChange={(e) => setForm({ ...form, city: e.target.value })}
+                onChange={(e) => updateForm({ city: e.target.value })}
                 placeholder="City"
                 className="w-full h-12 px-4 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold outline-none focus:border-black transition-all"
               />
             </div>
+
             <div className="space-y-1">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">State</label>
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                State
+              </label>
               <input
                 value={form.state}
-                onChange={(e) => setForm({ ...form, state: e.target.value })}
+                onChange={(e) => updateForm({ state: e.target.value })}
                 placeholder="State"
                 className="w-full h-12 px-4 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold outline-none focus:border-black transition-all"
               />
@@ -262,37 +390,57 @@ const SmartCheckoutAddress = ({ onAddressComplete }) => {
           </div>
 
           <div className="space-y-1">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Pincode</label>
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+              Pincode (Auto-fills City/State)
+            </label>
             <input
               value={form.pincode}
-              onChange={(e) => setForm({ ...form, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })}
+              onChange={(e) => handlePincodeChange(e.target.value)}
               placeholder="6-digit code"
               className="w-full h-12 px-4 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold outline-none focus:border-black transition-all"
             />
           </div>
+
+          <datalist id="indiaCities">
+            <option value="Mumbai" />
+            <option value="Delhi" />
+            <option value="Bangalore" />
+            <option value="Hyderabad" />
+            <option value="Ahmedabad" />
+            <option value="Chennai" />
+            <option value="Kolkata" />
+            <option value="Surat" />
+            <option value="Pune" />
+            <option value="Jaipur" />
+          </datalist>
         </div>
       </div>
+
+      {(fetching || saving) && (
+        <div className="absolute inset-0 bg-white/50 flex items-center justify-center backdrop-blur-sm z-50 rounded-2xl">
+          <Loader2 className="animate-spin text-black" size={24} />
+        </div>
+      )}
     </div>
   );
-};
+}
 
-/* ---------------- SUB-COMPONENTS ---------------- */
-
-const MapEvents = ({ onMapClick }) => {
+function MapEvents({ onMapClick }) {
   useMapEvents({
-    click(e) {
-      onMapClick(e.latlng.lat, e.latlng.lng);
+    click(event) {
+      onMapClick(event.latlng.lat, event.latlng.lng);
     },
   });
-  return null;
-};
 
-const MapController = ({ center }) => {
+  return null;
+}
+
+function MapController({ center }) {
   const map = useMap();
+
   useEffect(() => {
     map.setView(center, 13);
   }, [center, map]);
-  return null;
-};
 
-export default SmartCheckoutAddress;
+  return null;
+}

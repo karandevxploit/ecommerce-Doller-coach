@@ -2,8 +2,8 @@ const router = require("express").Router();
 const { safeHandler } = require("../middlewares/error.middleware");
 const { authLimiter } = require("../middlewares/rateLimiter.v2");
 const validate = require("../middlewares/validate.middleware");
+const validateRegister = require("../middlewares/validateRegister.middleware");
 const mongoose = require("mongoose");
-const { logger } = require("../utils/logger");
 
 const {
   register,
@@ -15,6 +15,7 @@ const {
   adminExists,
   sendOtp,
   verifyOtp,
+  resendOtp,
   resetPassword,
   requestLoginOtp,
   testEmail,
@@ -23,6 +24,7 @@ const {
 } = require("../controllers/auth.hybrid.controller");
 
 const { isAuthenticated, isAdmin } = require("../middlewares/auth.middleware");
+const User = require("../models/user.model");
 const { profile, saveFcmToken } = require("../controllers/user.controller");
 const notificationController = require("../controllers/notification.controller");
 
@@ -56,25 +58,23 @@ const validateObjectId = (req, res, next) => {
  * AUTH ROUTES (HARDENED)
  */
 router.post("/login", authLimiter, validate(loginSchema), safeHandler(login));
+router.post("/signin", authLimiter, validate(loginSchema), safeHandler(login));
 router.post("/logout", safeHandler(logout));
 router.post("/refresh-token", authLimiter, safeHandler(refreshToken));
 
 /**
  * ADMIN AUTH (STRICT)
  */
-router.post("/admin-login", (req, res, next) => {
-  console.log(">>> [ROUTE_HIT] POST /api/auth/admin-login at", new Date().toISOString());
-  next();
-}, safeHandler(adminLogin));
+router.post("/admin-login", authLimiter, safeHandler(adminLogin));
 
-// ⚠️ PROTECT THIS (should be internal or restricted)
-router.post("/admin-register", isAuthenticated, isAdmin, authLimiter, safeHandler(adminRegister));
+router.post("/admin-register", authLimiter, safeHandler(adminRegister));
 router.get("/admin-exists", authLimiter, safeHandler(adminExists));
 
 /**
  * USER REGISTER
  */
-router.post("/register", authLimiter, validate(registerSchema), safeHandler(register));
+router.post("/register", authLimiter, validateRegister, validate(registerSchema), safeHandler(register));
+router.post("/signup", authLimiter, validateRegister, validate(registerSchema), safeHandler(register));
 
 /**
  * EMAIL TEST (ADMIN ONLY)
@@ -88,6 +88,7 @@ router.get("/test-order-email", isAuthenticated, isAdmin, safeHandler(testOrderE
 router.post("/send-otp", authLimiter, validate(sendOtpSchema), safeHandler(sendOtp));
 router.post("/request-login-otp", authLimiter, safeHandler(requestLoginOtp));
 router.post("/verify-otp", authLimiter, validate(verifyOtpSchema), safeHandler(verifyOtp));
+router.post("/resend-otp", authLimiter, safeHandler(resendOtp));
 router.post("/reset-password", authLimiter, validate(resetPasswordSchema), safeHandler(resetPassword));
 
 /**
@@ -95,13 +96,28 @@ router.post("/reset-password", authLimiter, validate(resetPasswordSchema), safeH
  */
 router.post("/google", authLimiter, safeHandler(google));
 
-// ❌ REMOVED google-debug (should not exist in production)
-
 /**
  * PROFILE + NOTIFICATIONS
  */
 router.get("/profile", isAuthenticated, safeHandler(profile));
-router.get("/me", isAuthenticated, (req, res) => res.json({ success: true, user: req.user }));
+router.get("/me", isAuthenticated, async (req, res) => {
+  try {
+    const userId = req.user?._id || req.user?.id;
+    if (!mongoose.Types.ObjectId.isValid(String(userId || ""))) {
+      return res.status(401).json({ success: false, message: "Invalid session" });
+    }
+
+    const user = await User
+      .findOne({ _id: userId, isDeleted: { $ne: true } })
+      .select("-password")
+      .lean();
+
+    if (!user) return res.status(401).json({ success: false, message: "User not found" });
+    res.json({ success: true, user, data: { user } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 router.post("/fcm-token", isAuthenticated, safeHandler(saveFcmToken));
 router.get("/notifications", isAuthenticated, safeHandler(notificationController.myNotifications));
 

@@ -1,16 +1,26 @@
 const productRepository = require("../repositories/product.repository");
-const orderRepository = require("../repositories/order.repository");
 const Coupon = require("../models/coupon.model");
 const Offer = require("../models/offer.model");
+const Order = require("../models/order.model");
+const User = require("../models/user.model");
 const { logger } = require("../utils/logger");
+const { sendAdminOrderEmail } = require("../utils/sendEmail");
+
+const GST_PERCENT = 18;
+const DELIVERY_FEE = 40;
+const COD_FEE = 50;
 
 class OrderService {
-  async validateCartAndCalculateTotal(products, couponCode = null) {
+  async validateCartAndCalculateTotal(products, couponCode = null, paymentMethod = "COD") {
     let subtotal = 0;
     const validatedProducts = [];
 
     const productIds = products.map((p) => p.productId);
-    const dbProducts = await productRepository.model.find({ _id: { $in: productIds } }).lean();
+    const dbProducts = await productRepository.model.find({
+      _id: { $in: productIds },
+      isDeleted: { $ne: true },
+      status: "active",
+    }).lean();
     const productMap = new Map(dbProducts.map((p) => [p._id.toString(), p]));
 
     for (const item of products) {
@@ -21,7 +31,7 @@ class OrderService {
         throw new Error(`Insufficient stock for product: ${product.name || product.title}`);
       }
 
-      const price = product.discountPrice > 0 ? product.discountPrice : product.price;
+      const price = Number(product.price) || Number(item.price) || 0;
       const itemTotal = price * item.quantity;
       subtotal += itemTotal;
 
@@ -33,6 +43,9 @@ class OrderService {
         size: item.size,
         topSize: item.topSize,
         bottomSize: item.bottomSize,
+        color: item.color,
+        image: product.primaryImage || product.images?.[0] || "",
+        sku: product.sku || "",
       });
     }
 
@@ -45,15 +58,17 @@ class OrderService {
       
       // 1. Sequential Lookup: First check Coupons, then check Offers
       let discountData = await Coupon.findOne({
-        code: { $regex: `^${code}$`, $options: "i" }
+        code,
+        isDeleted: { $ne: true },
       });
 
       if (discountData) {
         discountSource = "coupon";
       } else {
         discountData = await Offer.findOne({
-          couponCode: { $regex: `^${code}$`, $options: "i" },
-          isActive: true
+          couponCode: code,
+          isActive: true,
+          isDeleted: { $ne: true },
         });
         if (discountData) discountSource = "offer";
       }
@@ -63,8 +78,8 @@ class OrderService {
       }
       
       const now = new Date();
-      const startDate = discountData.startDate || null;
-      const endDate = discountData.endDate || discountData.expiryDate || null;
+      const startDate = discountData.startDate || discountData.validFrom || null;
+      const endDate = discountData.endDate || discountData.expiryDate || discountData.validTill || null;
 
       if (startDate && now < new Date(startDate)) {
         throw new Error("Coupon not yet active");
@@ -100,20 +115,21 @@ class OrderService {
       appliedDiscount = discountData;
     }
 
-    // Absolute Backend Logic: GST 18%, Delivery 0
-    const gst = Math.round(subtotal * 0.18);
-    const delivery = 0;
+    const gst = Math.round(subtotal * (GST_PERCENT / 100));
+    const delivery = DELIVERY_FEE;
+    const codFee = String(paymentMethod || "").toUpperCase() === "COD" ? COD_FEE : 0;
     const discount = discountAmount;
-    const total = subtotal - discount + gst + delivery;
+    const total = subtotal - discount + gst + delivery + codFee;
 
     return {
       products: validatedProducts,
       subtotal,
       discount,
       delivery,
+      codFee,
       gst,
       total,
-      gstPercent: 18,
+      gstPercent: GST_PERCENT,
       coupon: appliedDiscount ? { 
         code: appliedDiscount.code || appliedDiscount.couponCode, 
         id: appliedDiscount._id,
@@ -122,15 +138,15 @@ class OrderService {
     };
   }
 
-  async createOrder(userId, orderData) {
-    const { 
+  async createOrder(userId, orderData, externalSession = null) {
+    const {
       products, subtotal, discount, 
-      delivery, gst, total, 
-      address, paymentMethod, couponCode 
+      delivery, gst, total, codFee,
+      address, shippingAddress: providedShippingAddress, paymentMethod, couponCode
     } = orderData;
-    const mongoose = require("mongoose");
-    const session = await mongoose.startSession();
-    session.startTransaction();
+    const ownsSession = !externalSession;
+    const session = externalSession || await require("mongoose").startSession();
+    if (ownsSession) session.startTransaction();
 
     try {
       // 1. Atomic stock check and decrease
@@ -148,54 +164,49 @@ class OrderService {
       }
 
       // 2. Prepare shipping address
+      const sourceAddress = typeof address === "object" ? address : providedShippingAddress;
       let shippingAddress = {};
-      if (typeof address === "object") {
+      if (typeof sourceAddress === "object" && sourceAddress) {
         shippingAddress = {
-          name: address.name || "",
-          phone: address.phone || "",
-          address: address.address || address.addressLine1 || "",
-          city: address.city || "",
-          state: address.state || "",
-          pincode: address.pincode || "",
+          fullName: sourceAddress.fullName || sourceAddress.name || "",
+          phone: sourceAddress.phone || "",
+          addressLine1: sourceAddress.addressLine1 || sourceAddress.street || sourceAddress.address || "",
+          addressLine2: sourceAddress.addressLine2 || "",
+          landmark: sourceAddress.landmark || "",
+          city: sourceAddress.city || "",
+          state: sourceAddress.state || "",
+          pincode: sourceAddress.pincode || "",
         };
       }
 
-      const cleanAddressString = typeof address === "object" 
-        ? `${address.address || address.addressLine1 || ""}, ${address.city || ""}, ${address.state || ""} - ${address.pincode || ""}`
-        : address;
+      const finalGst = Math.round(subtotal * (GST_PERCENT / 100));
+      const finalDelivery = DELIVERY_FEE;
+      const finalCodFee = String(paymentMethod || "").toUpperCase() === "COD" ? COD_FEE : 0;
+      const finalTotal = subtotal - discount + finalGst + finalDelivery + finalCodFee;
 
-      // 3. Absolute Persistence Manifest: Re-calculate GST (18%) and Total on the fly
-      const finalGst = Math.round(subtotal * 0.18);
-      const finalTotal = subtotal - discount + finalGst;
-
-      const order = await orderRepository.create({
+      const [order] = await Order.create([{
         userId,
         products,
         subtotal,
         discount,
-        delivery: 0, // Enforced Free Delivery
+        delivery: finalDelivery,
+        codFee: finalCodFee,
         gst: finalGst,
+        gstPercent: GST_PERCENT,
         total: finalTotal,
         shippingAddress,
         paymentMethod,
         couponCode: couponCode ? couponCode.toUpperCase() : null,
         status: "placed",
-      }, { session });
+      }], { session });
 
-      console.log("ORDER SAVED:", JSON.stringify({ 
-        id: order._id, 
-        subtotal: order.subtotal, 
-        gst: order.gst, 
-        total: order.total 
-      }, null, 2));
-
-      // 4. Finalize coupon usage (Atomic check & increment)
-      if (couponCode) {
+      // 4. Finalize coupon usage for COD immediately. Online orders finalize after payment success.
+      if (couponCode && paymentMethod === "COD") {
         const code = couponCode.toUpperCase().trim();
         
         // Atomic attempt to claim a coupon slot
         let couponUpdate = await Coupon.findOneAndUpdate(
-          { code, $or: [{ usageLimit: 0 }, { $expr: { $lt: ["$usedCount", "$usageLimit"] } }] },
+          { code, isDeleted: { $ne: true }, $or: [{ usageLimit: null }, { usageLimit: 0 }, { $expr: { $lt: ["$usedCount", "$usageLimit"] } }] },
           { $inc: { usedCount: 1 } },
           { session, new: true }
         );
@@ -203,7 +214,7 @@ class OrderService {
         // If not found in Coupons, stay within same transaction and try Offers
         if (!couponUpdate) {
           couponUpdate = await Offer.findOneAndUpdate(
-            { couponCode: code, isActive: true, $or: [{ usageLimit: 0 }, { $expr: { $lt: ["$usedCount", "$usageLimit"] } }] },
+            { couponCode: code, isActive: true, isDeleted: { $ne: true }, $or: [{ usageLimit: null }, { usageLimit: 0 }, { $expr: { $lt: ["$usedCount", "$usageLimit"] } }] },
             { $inc: { usedCount: 1 } },
             { session, new: true }
           );
@@ -214,14 +225,30 @@ class OrderService {
         }
       }
 
-      await session.commitTransaction();
+      if (ownsSession) await session.commitTransaction();
+
+      setImmediate(async () => {
+        try {
+          const customer = await User.findById(userId).select("name email").lean();
+          await sendAdminOrderEmail({
+            order: order.toObject ? order.toObject() : order,
+            customer,
+          });
+        } catch (mailError) {
+          logger.error("[ORDER_ADMIN_EMAIL_FAILED]", {
+            orderId: String(order?._id || ""),
+            error: mailError.message,
+          });
+        }
+      });
+
       return order;
     } catch (error) {
-      await session.abortTransaction();
+      if (ownsSession) await session.abortTransaction();
       logger.error(`Order Creation Transaction Failed: ${error.message}`);
       throw error;
     } finally {
-      session.endSession();
+      if (ownsSession) session.endSession();
     }
   }
 
@@ -233,7 +260,7 @@ class OrderService {
       
       // Try to update Coupon first
       const couponUpdate = await Coupon.updateOne(
-        { code },
+        { code, isDeleted: { $ne: true }, $or: [{ usageLimit: null }, { usageLimit: 0 }, { $expr: { $lt: ["$usedCount", "$usageLimit"] } }] },
         { $inc: { usedCount: 1 } },
         options
       );
@@ -241,7 +268,7 @@ class OrderService {
       // If not a coupon, try to update Offer
       if (couponUpdate.matchedCount === 0) {
         await Offer.updateOne(
-          { couponCode: code },
+          { couponCode: code, isActive: true, isDeleted: { $ne: true }, $or: [{ usageLimit: null }, { usageLimit: 0 }, { $expr: { $lt: ["$usedCount", "$usageLimit"] } }] },
           { $inc: { usedCount: 1 } },
           options
         );

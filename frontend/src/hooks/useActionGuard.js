@@ -5,36 +5,59 @@ import toast from "react-hot-toast";
 
 /**
  * useActionGuard Hook
- * 
+ *
  * Protects sensitive actions (Add to Cart, Wishlist, etc.)
- * by redirecting to login and resuming after success.
+ * by redirecting/opening login and resuming after success.
  */
 export const useActionGuard = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { isAuthenticated } = useAuthStore();
 
-  const guardAction = useCallback((type, payload, callback) => {
-    if (isAuthenticated) {
-      // Just run the action if already logged in
-      return callback();
-    }
+  const { isAuthenticated, openAuthModal } = useAuthStore();
 
-    // Save intended action for resumption
-    const pendingAction = {
-      type,
-      payload,
-      path: location.pathname
-    };
+  const guardAction = useCallback(
+    async (type, payload = {}, callback) => {
+      if (isAuthenticated) {
+        if (typeof callback === "function") {
+          return callback();
+        }
 
-    localStorage.setItem("pendingAction", JSON.stringify(pendingAction));
+        return true;
+      }
 
-    // Notify and redirect
-    toast("Please login to continue", { icon: "🔒" });
-    navigate("/login", { state: { from: location.pathname } });
+      const pendingAction = {
+        type,
+        payload,
+        path: `${location.pathname}${location.search || ""}`,
+        createdAt: Date.now(),
+      };
 
-    return false;
-  }, [isAuthenticated, navigate, location]);
+      try {
+        localStorage.setItem("pendingAction", JSON.stringify(pendingAction));
+      } catch {
+        // Ignore storage errors. Login guard should still work.
+      }
+
+      toast("Please login to continue", { icon: "🔒" });
+
+      if (typeof openAuthModal === "function") {
+        openAuthModal();
+      } else {
+        navigate("/login", {
+          replace: false,
+          state: {
+            from: location,
+            pendingAction,
+          },
+        });
+      }
+
+      return false;
+    },
+    [isAuthenticated, location, navigate, openAuthModal]
+  );
 
   return { guardAction };
 };
+
+export default useActionGuard;

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Sparkles, ShoppingBag, Heart } from 'lucide-react';
+import { FALLBACK_IMAGE_URL, INTERNAL_FALLBACK, resolveImageUrl } from '../../../utils/url';
 
 const ProductCard = ({ product }) => {
   const {
@@ -16,15 +17,18 @@ const ProductCard = ({ product }) => {
     ? Math.round(((originalPrice - price) / originalPrice) * 100) 
     : 0;
 
-  const activeImage = variants[0]?.images[0] || "https://placehold.co/400x500/0f172a/ffffff?text=Product+Image";
+  const activeImage = variants[0]?.images[0] || INTERNAL_FALLBACK;
 
   return (
-    <div className="w-full max-w-sm bg-white rounded-3xl overflow-hidden shadow-2xl shadow-slate-200/50 group transition-all duration-500 hover:-translate-y-2">
+    <div className="w-full bg-white rounded-2xl overflow-hidden shadow-sm border border-slate-200 group transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
       {/* Image Section */}
       <div className="relative aspect-[4/5] overflow-hidden bg-slate-100">
         <img 
-          src={activeImage} 
+          src={resolveImageUrl(activeImage)} 
           alt={title}
+          onError={(event) => {
+            event.currentTarget.src = FALLBACK_IMAGE_URL;
+          }}
           className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
         />
         
@@ -54,7 +58,7 @@ const ProductCard = ({ product }) => {
 
         {/* Hover Add to Cart */}
         <div className="absolute bottom-0 inset-x-0 p-4 translate-y-full group-hover:translate-y-0 transition-transform duration-500">
-          <button className="w-full py-3 bg-slate-900 text-white rounded-2xl font-bold text-sm tracking-widest uppercase flex items-center justify-center gap-2 shadow-xl">
+          <button className="w-full py-2.5 bg-slate-900 text-white rounded-xl font-bold text-xs tracking-widest uppercase flex items-center justify-center gap-2 shadow-lg">
             <ShoppingBag size={18} />
             Quick Add
           </button>

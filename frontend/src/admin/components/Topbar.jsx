@@ -1,101 +1,86 @@
-import { useEffect, useState, useMemo, useRef } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { LogOut, Menu, Bell, Search, Settings } from "lucide-react";
 import { api } from "../../api/client";
 import { useAuthStore } from "../../store";
 import Avatar from "../../components/ui/Avatar";
-import { useRealtime } from "../../hooks/useRealtime";
 import { useNavigate } from "react-router-dom";
-import toast from "react-hot-toast";
+
+const getNotificationList = (responseData) => {
+  if (Array.isArray(responseData)) return responseData;
+  if (Array.isArray(responseData?.data)) return responseData.data;
+  if (Array.isArray(responseData?.notifications)) return responseData.notifications;
+  return [];
+};
 
 export default function Topbar({ onMenuClick }) {
   const { user: adminUser, logout } = useAuthStore();
   const [notes, setNotes] = useState([]);
   const navigate = useNavigate();
-  const seenIds = useRef(new Set());
 
-  // ✅ INITIAL LOAD FIX
   useEffect(() => {
     let cancelled = false;
 
-    (async () => {
+    const fetchNotifications = async () => {
       try {
         const res = await api.get("/admin/notifications");
-        const data = res?.data || [];
+        const list = getNotificationList(res?.data);
 
         if (!cancelled) {
-          setNotes(Array.isArray(data) ? data : []);
-          data.forEach(n => seenIds.current.add(n._id));
+          setNotes(list);
         }
-      } catch {
-        if (!cancelled) setNotes([]);
+      } catch (error) {
+        if (!cancelled) {
+          setNotes([]);
+        }
       }
-    })();
-
-    return () => { cancelled = true; };
-  }, []);
-
-  // ✅ REALTIME FIX
-  const { socket } = useRealtime(true);
-
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleNewNote = (note) => {
-      if (seenIds.current.has(note._id)) return;
-
-      seenIds.current.add(note._id);
-      setNotes((prev) => [note, ...prev]);
-
-      toast.success(`Operational Alert: ${note.title}`, {
-        id: `note-${note._id}`,
-        icon: "🔔",
-      });
     };
 
-    socket.off("adminNotification"); // prevent duplicates
-    socket.on("adminNotification", handleNewNote);
+    fetchNotifications();
 
-    return () => socket.off("adminNotification", handleNewNote);
-  }, [socket]);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  // ✅ MEMOIZED unread count
-  const unread = useMemo(
-    () => notes.reduce((acc, n) => (!n.readAt ? acc + 1 : acc), 0),
-    [notes]
-  );
+  const unread = useMemo(() => {
+    return notes.reduce((acc, note) => {
+      return !note?.readAt ? acc + 1 : acc;
+    }, 0);
+  }, [notes]);
 
-  // ✅ LOGOUT FIX
   const handleLogout = () => {
     logout();
-    navigate("/admin/login");
+    navigate("/admin/login", { replace: true });
+  };
+
+  const handleSettingsClick = () => {
+    navigate("/admin/settings");
   };
 
   return (
-    <header className="sticky top-0 z-[50] bg-white/80 backdrop-blur-md border-b border-[#e2e8f0]">
-      <div className="flex h-16 items-center justify-between px-6 lg:px-8">
-
+    <header className="sticky top-0 z-[50] bg-white/90 backdrop-blur-md border-b border-slate-200">
+      <div className="flex h-[60px] items-center justify-between px-4 md:px-6 lg:px-8">
         {/* LEFT */}
         <div className="flex items-center gap-4 flex-1">
-          <button onClick={onMenuClick} aria-label="Open Menu">
+          <button type="button" onClick={onMenuClick} aria-label="Open Menu" className="icon-button !border-transparent lg:hidden">
             <Menu size={20} />
           </button>
 
-          <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-gray-50 border rounded-lg w-full max-w-sm">
-            <Search size={16} />
+          <div className="hidden md:flex items-center gap-2 px-3 bg-slate-50 border border-slate-200 rounded-lg h-10 w-full max-w-sm">
+            <Search size={16} className="text-slate-400" />
             <input
               type="text"
               placeholder="Search..."
-              className="bg-transparent outline-none w-full"
+              className="bg-transparent outline-none w-full text-sm font-semibold placeholder:text-slate-400 border-none focus:ring-0"
             />
           </div>
         </div>
 
         {/* RIGHT */}
         <div className="flex items-center gap-4">
-
           {/* NOTIFICATIONS */}
           <div className="relative">
-            <button aria-label="Notifications" className="relative">
+            <button type="button" aria-label="Notifications" className="icon-button !border-transparent relative">
               <Bell size={18} />
               {unread > 0 && (
                 <span className="absolute top-0 right-0 text-xs bg-red-500 text-white px-1 rounded">
@@ -106,21 +91,17 @@ export default function Topbar({ onMenuClick }) {
           </div>
 
           {/* SETTINGS */}
-          <button aria-label="Settings">
+          <button type="button" aria-label="Settings" onClick={handleSettingsClick} className="icon-button !border-transparent">
             <Settings size={18} />
           </button>
 
           {/* USER */}
-          <div className="flex items-center gap-3">
-            <span className="hidden md:block">{adminUser?.name || "Admin"}</span>
+          <div className="flex items-center gap-3 pl-2 border-l border-slate-200">
+            <span className="hidden md:block text-sm font-bold text-slate-700">{adminUser?.name || "Admin"}</span>
 
-            <Avatar
-              src={adminUser?.avatar}
-              name={adminUser?.name}
-              size="sm"
-            />
+            <Avatar src={adminUser?.avatar} name={adminUser?.name || "Admin"} size="sm" />
 
-            <button onClick={handleLogout} aria-label="Logout">
+            <button type="button" onClick={handleLogout} aria-label="Logout" className="icon-button !border-transparent">
               <LogOut size={18} />
             </button>
           </div>

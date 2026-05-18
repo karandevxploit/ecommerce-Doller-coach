@@ -6,26 +6,79 @@ const { logger } = require("../utils/logger");
 
 class PaymentService {
   constructor() {
-    this.razorpay = new Razorpay({
-      key_id: env.RAZORPAY_KEY_ID,
-      key_secret: env.RAZORPAY_KEY_SECRET,
-    });
+    this.razorpay = null;
+    this.pendingOrders = new Map();
+  }
+
+  getClient() {
+    if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
+      throw new Error("Razorpay credentials are not configured");
+    }
+
+    if (!this.razorpay) {
+      this.razorpay = new Razorpay({
+        key_id: env.RAZORPAY_KEY_ID,
+        key_secret: env.RAZORPAY_KEY_SECRET,
+      });
+    }
+
+    return this.razorpay;
   }
 
   async createRazorpayOrder(orderId, amount) {
+    const amountNumber = Number(amount);
+    if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+      throw new Error("Invalid payment amount");
+    }
+
     const options = {
-      amount: Math.round(amount * 100), // paise
+      amount: Math.round(amountNumber * 100), // paise
       currency: "INR",
-      receipt: `order_rcpt_${orderId}`,
+      receipt: `order_rcpt_${String(orderId || Date.now()).slice(-32)}`,
     };
 
     try {
-      const rpOrder = await this.razorpay.orders.create(options);
+      const rpOrder = await this.getClient().orders.create(options);
       return rpOrder;
     } catch (err) {
       logger.error("Razorpay order creation failed:", err);
       throw err;
     }
+  }
+
+  rememberPendingOrder({ razorpayOrderId, amount, userId, ttlMs = 30 * 60 * 1000 }) {
+    if (!razorpayOrderId) return;
+    this.pendingOrders.set(String(razorpayOrderId), {
+      amount: Number(amount),
+      userId: userId ? String(userId) : "",
+      expiresAt: Date.now() + ttlMs,
+    });
+  }
+
+  validatePendingOrder({ razorpayOrderId, amount, userId }) {
+    const entry = this.pendingOrders.get(String(razorpayOrderId || ""));
+    if (!entry) return { ok: true, skipped: true };
+
+    if (entry.expiresAt < Date.now()) {
+      this.pendingOrders.delete(String(razorpayOrderId));
+      return { ok: false, message: "Payment order expired" };
+    }
+
+    if (entry.userId && userId && entry.userId !== String(userId)) {
+      return { ok: false, message: "Payment order does not belong to this user" };
+    }
+
+    const expected = Math.round(Number(entry.amount) * 100);
+    const actual = Math.round(Number(amount) * 100);
+    if (expected !== actual) {
+      return { ok: false, message: "Payment amount mismatch" };
+    }
+
+    return { ok: true };
+  }
+
+  forgetPendingOrder(razorpayOrderId) {
+    this.pendingOrders.delete(String(razorpayOrderId || ""));
   }
 
   /**
@@ -38,6 +91,8 @@ class PaymentService {
   }
 
   verifySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature) {
+    if (!env.RAZORPAY_KEY_SECRET) return false;
+
     const text = `${razorpayOrderId}|${razorpayPaymentId}`;
     const generatedSignature = crypto
       .createHmac("sha256", env.RAZORPAY_KEY_SECRET)
@@ -82,8 +137,8 @@ class PaymentService {
 
     if (eventType === "payment.captured") {
       // 2. CRITICAL SECURITY: Amount Verification
-      // Razorpay amount is in paise (totalAmount * 100)
-      const expectedAmount = Math.round(dbOrder.totalAmount * 100);
+      // Razorpay amount is in paise (total * 100)
+      const expectedAmount = Math.round(dbOrder.total * 100);
       const paidAmount = payment.amount;
 
       if (Math.abs(paidAmount - expectedAmount) > 0) {

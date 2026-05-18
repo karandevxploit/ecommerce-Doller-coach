@@ -1,6 +1,6 @@
-const mongoose = require("mongoose");
 const path = require("path");
 const dotenv = require("dotenv");
+const connectDB = require("../config/db");
 const User = require("../models/user.model");
 
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
@@ -14,9 +14,7 @@ if (process.env.NODE_ENV === "production" && !FORCE) {
 
 async function run() {
   try {
-    await mongoose.connect(process.env.MONGO_URI, {
-      serverSelectionTimeoutMS: 5000
-    });
+    await connectDB();
 
     const email = process.env.ADMIN_EMAIL || "admin@example.com";
     const password = process.env.ADMIN_PASSWORD || "ChangeMe@123";
@@ -55,7 +53,7 @@ async function run() {
     console.log(`✅ Admin ready: ${email}`);
     console.log("⚠️ Change password immediately after first login.");
 
-    await mongoose.disconnect();
+    await connectDB.close();
     process.exit(0);
 
   } catch (err) {

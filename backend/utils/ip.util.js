@@ -14,8 +14,18 @@
  * Normalizes IPv4 and IPv6 addresses and extracts identity signals.
  */
 exports.getExtractionKeys = (req) => {
-  const ip = req.ip || req.headers["x-forwarded-for"] || "0.0.0.0";
-  const userId = req.user?._id?.toString() || null;
+  const forwarded = req.headers["x-forwarded-for"];
+  const forwardedIp = Array.isArray(forwarded)
+    ? forwarded[0]
+    : String(forwarded || "").split(",")[0];
+  const ip =
+    forwardedIp?.trim() ||
+    req.headers["cf-connecting-ip"] ||
+    req.headers["x-real-ip"] ||
+    req.ip ||
+    req.socket?.remoteAddress ||
+    "0.0.0.0";
+  const userId = (req.user?._id || req.user?.id || req.user?.userId || "")?.toString() || null;
 
   let subnet = "unknown-subnet";
   let normalizedIp = ip;

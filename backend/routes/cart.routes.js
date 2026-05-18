@@ -46,7 +46,7 @@ router.get("/", protect, safeHandler(getCart));
  * - Validated
  */
 router.post(
-    "/",
+    "/add",
     protect,
     authLimiter,
     validate(addToCartSchema, "body"),

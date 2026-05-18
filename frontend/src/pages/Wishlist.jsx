@@ -1,7 +1,7 @@
 import { Heart, ArrowRight, Trash2 } from "lucide-react";
 import Button from "../components/ui/Button";
 import { Link, useNavigate } from "react-router-dom";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuthStore, useWishlistStore } from "../store";
 import ProductCard from "../components/ProductCard";
 import { motion } from "framer-motion";
@@ -10,7 +10,8 @@ import toast from "react-hot-toast";
 export default function Wishlist() {
   const navigate = useNavigate();
 
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, openAuthModal } = useAuthStore();
+
   const {
     items = [],
     isLoading,
@@ -18,18 +19,40 @@ export default function Wishlist() {
     fetchWishlist,
   } = useWishlistStore();
 
+  const [removingId, setRemovingId] = useState(null);
+
+  const safeItems = useMemo(() => {
+    return Array.isArray(items)
+      ? items.filter((item) => item && typeof item === "object")
+      : [];
+  }, [items]);
+
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && typeof fetchWishlist === "function") {
       fetchWishlist();
     }
   }, [isAuthenticated, fetchWishlist]);
 
-  const handleRemove = (id) => {
+  const handleLogin = () => {
+    if (typeof openAuthModal === "function") {
+      openAuthModal();
+      return;
+    }
+
+    navigate("/login");
+  };
+
+  const handleRemove = async (id) => {
+    if (!id || removingId) return;
+
     try {
-      toggleWishlist(id);
+      setRemovingId(id);
+      await toggleWishlist?.(id);
       toast.success("Removed from wishlist");
     } catch {
       toast.error("Failed to remove item");
+    } finally {
+      setRemovingId(null);
     }
   };
 
@@ -39,14 +62,14 @@ export default function Wishlist() {
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        className="min-h-screen flex items-center justify-center px-4 bg-gray-50"
+        className="min-h-screen flex items-center justify-center px-4 bg-slate-50"
       >
-        <div className="max-w-md w-full bg-white border rounded-2xl p-8 text-center shadow-sm">
-          <div className="h-12 w-12 bg-black text-white rounded-lg flex items-center justify-center mx-auto mb-4">
+        <div className="max-w-md w-full surface p-7 text-center">
+          <div className="h-11 w-11 bg-black text-white rounded-lg flex items-center justify-center mx-auto mb-4">
             <Heart size={22} />
           </div>
 
-          <h2 className="text-xl font-semibold mb-2">
+          <h2 className="text-xl font-black uppercase tracking-tight mb-2">
             Login to view your wishlist
           </h2>
 
@@ -54,10 +77,7 @@ export default function Wishlist() {
             Save products and access them anytime
           </p>
 
-          <Button
-            onClick={() => navigate("/login")}
-            className="w-full"
-          >
+          <Button onClick={handleLogin} className="w-full">
             Login <ArrowRight size={16} />
           </Button>
         </div>
@@ -70,18 +90,18 @@ export default function Wishlist() {
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="min-h-screen bg-white pb-20"
+      className="min-h-screen bg-slate-50 pb-20"
     >
-      <div className="max-w-7xl mx-auto px-4 py-6">
+      <div className="page-shell">
         {/* HEADER */}
-        <div className="flex flex-col md:flex-row justify-between items-center mb-6 border-b pb-4 gap-4">
-          <h1 className="text-2xl font-semibold">
-            My Wishlist ({items.length})
+        <div className="surface p-4 md:p-5 flex flex-col md:flex-row justify-between items-center mb-5 gap-4">
+          <h1 className="page-title">
+            My Wishlist ({safeItems.length})
           </h1>
 
           <Link
             to="/collection"
-            className="text-sm border px-4 py-2 rounded-lg flex items-center gap-2"
+            className="btn-luxury-outline h-11 px-5"
           >
             Browse Products <ArrowRight size={14} />
           </Link>
@@ -95,14 +115,11 @@ export default function Wishlist() {
         )}
 
         {/* EMPTY */}
-        {!isLoading && items.length === 0 && (
-          <div className="text-center py-20">
-            <Heart
-              size={40}
-              className="mx-auto text-gray-300 mb-4"
-            />
+        {!isLoading && safeItems.length === 0 && (
+          <div className="empty-state">
+            <Heart size={40} className="mx-auto text-gray-300 mb-4" />
 
-            <h2 className="text-lg font-semibold">
+            <h2 className="text-lg font-black uppercase tracking-tight">
               Your wishlist is empty
             </h2>
 
@@ -117,24 +134,32 @@ export default function Wishlist() {
         )}
 
         {/* PRODUCTS */}
-        {!isLoading && items.length > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {items.map((p) => (
-              <div
-                key={p.id}
-                className="relative group"
-              >
-                <ProductCard product={p} />
+        {!isLoading && safeItems.length > 0 && (
+          <div className="product-grid-compact">
+            {safeItems.map((product, index) => {
+              const id = product.id || product._id || product.productId;
 
-                <button
-                  aria-label="Remove from wishlist"
-                  onClick={() => handleRemove(p.id)}
-                  className="absolute top-2 right-2 bg-white border rounded-full p-2 shadow hover:bg-gray-100"
+              return (
+                <div
+                  key={id || `wishlist-product-${index}`}
+                  className="relative group"
                 >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
+                  <ProductCard product={product} />
+
+                  {id && (
+                    <button
+                      type="button"
+                      aria-label="Remove from wishlist"
+                      onClick={() => handleRemove(id)}
+                      disabled={removingId === id}
+                      className="absolute top-2 right-2 bg-white border border-slate-200 rounded-full p-2 shadow hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

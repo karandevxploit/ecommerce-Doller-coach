@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   LayoutGrid, 
   Layers, 
@@ -18,7 +18,9 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { api } from '../../../api/client';
-import { uploadMultipleImages } from '../../../api/upload';
+import { ENDPOINTS } from '../../../api/endpoints';
+import { uploadImage, uploadProductVideo } from '../../../api/upload';
+import { FALLBACK_IMAGE_URL, resolveImageUrl, resolveVideoUrl } from '../../../utils/url';
 import ProductCard from './ProductCard';
 import { SIZE_CHART, CATEGORIES, SUBCATEGORIES } from './constants';
 
@@ -27,10 +29,12 @@ const defaultForm = {
   description: "",
   price: 0,
   originalPrice: 0,
-  category: "men",
-  subcategory: "topwear",
+  category: "",
+  subcategory: "",
+  gender: "men",
+  colors: [], // Top-level for filtering
+  sizes: [],  // Top-level for filtering
   productType: "",
-  sizes: [],
   variants: [
     {
       color: "",
@@ -43,7 +47,7 @@ const defaultForm = {
   featured: false,
   trending: false,
   badge: { text: "", color: "#0f172a", enabled: false },
-  offer: { text: "", enabled: false },
+  offer: { title: "", discount: "", couponCode: "", startDate: "", expiryDate: "", enabled: false },
   controls: {
     codAllowed: true,
     showETA: true,
@@ -59,60 +63,237 @@ const TABS = [
   { id: 'controls', label: 'Controls', icon: Settings },
 ];
 
+const toDateInputValue = (value) => {
+  if (!value) return "";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  return date.toISOString().split('T')[0];
+};
+
+const numberInputValue = (value) => {
+  if (value === "" || value === null || value === undefined) return "";
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric !== 0 ? String(numeric) : "";
+};
+
+const parseNumberInput = (value) => {
+  if (value === "") return "";
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : "";
+};
+
+const COLOR_NAME_TO_HEX = {
+  black: "#000000",
+  white: "#ffffff",
+  blue: "#2563eb",
+  navy: "#1e3a8a",
+  red: "#dc2626",
+  green: "#16a34a",
+  yellow: "#facc15",
+  orange: "#f97316",
+  pink: "#ec4899",
+  purple: "#9333ea",
+  grey: "#6b7280",
+  gray: "#6b7280",
+  brown: "#7c2d12",
+  beige: "#d6b98c",
+  cream: "#f5f5dc",
+  maroon: "#7f1d1d",
+  olive: "#4d7c0f",
+};
+
+const resolveColorHex = (name, fallback = "#000000") => {
+  const normalized = String(name || "").trim().toLowerCase();
+  if (!normalized) return fallback;
+
+  const words = normalized.split(/[\s/_-]+/).filter(Boolean);
+  for (const word of words) {
+    if (COLOR_NAME_TO_HEX[word]) return COLOR_NAME_TO_HEX[word];
+  }
+
+  return COLOR_NAME_TO_HEX[normalized] || fallback;
+};
+
+const detectDominantImageColor = (url) => new Promise((resolve) => {
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+
+  img.onload = () => {
+    try {
+      const canvas = document.createElement("canvas");
+      const size = 64;
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return resolve(null);
+
+      ctx.drawImage(img, 0, 0, size, size);
+      const pixels = ctx.getImageData(0, 0, size, size).data;
+      const scores = {};
+
+      const toColorName = (r, g, b) => {
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        const delta = max - min;
+        const saturation = max === 0 ? 0 : delta / max;
+        const value = max / 255;
+
+        if (saturation < 0.12) {
+          if (value < 0.22) return "black";
+          if (value > 0.88) return "";
+          return "grey";
+        }
+
+        let hue = 0;
+        if (delta !== 0) {
+          if (max === r) hue = ((g - b) / delta) % 6;
+          else if (max === g) hue = (b - r) / delta + 2;
+          else hue = (r - g) / delta + 4;
+          hue *= 60;
+          if (hue < 0) hue += 360;
+        }
+
+        if (hue < 15 || hue >= 345) return value < 0.42 ? "maroon" : "red";
+        if (hue < 45) return value < 0.48 ? "brown" : "orange";
+        if (hue < 70) return "yellow";
+        if (hue < 165) return value < 0.45 ? "olive" : "green";
+        if (hue < 255) return value < 0.38 ? "navy" : "blue";
+        if (hue < 290) return "purple";
+        if (hue < 345) return value < 0.45 ? "maroon" : "pink";
+        return "";
+      };
+
+      for (let i = 0; i < pixels.length; i += 4 * 3) {
+        const alpha = pixels[i + 3];
+        if (alpha < 180) continue;
+
+        const name = toColorName(pixels[i], pixels[i + 1], pixels[i + 2]);
+        if (!name) continue;
+
+        scores[name] = (scores[name] || 0) + 1;
+      }
+
+      const [name] = Object.entries(scores).sort((a, b) => b[1] - a[1])[0] || [];
+      resolve(name ? { name, hex: COLOR_NAME_TO_HEX[name] || "#000000" } : null);
+    } catch {
+      resolve(null);
+    }
+  };
+
+  img.onerror = () => resolve(null);
+  img.src = resolveImageUrl(url);
+});
+
+const isUsableImageValue = (value) => {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return false;
+
+  return (
+    raw.startsWith("http://") ||
+    raw.startsWith("https://") ||
+    raw.startsWith("data:image/") ||
+    raw.startsWith("blob:") ||
+    raw.startsWith("/uploads/") ||
+    raw.startsWith("uploads/")
+  );
+};
+
+const isPersistedImageValue = (value) => {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return false;
+
+  if (raw.startsWith("/uploads/") || raw.startsWith("uploads/")) return true;
+
+  try {
+    const url = new URL(raw);
+    return url.pathname.startsWith("/uploads/");
+  } catch {
+    return false;
+  }
+};
+
+const normalizeImages = (images) =>
+  Array.isArray(images) ? images.filter(isUsableImageValue) : [];
+
+const normalizePersistedImages = (images) =>
+  Array.isArray(images) ? [...new Set(images.filter(isPersistedImageValue))] : [];
+
 const normalizeProductForForm = (data) => {
   if (!data) return defaultForm;
 
-  // 1. Group flat variants by color
-  const groupedVariants = [];
-  const colorMap = {};
+  let variants = [];
 
-  (data.variants || []).forEach(v => {
-    const colorKey = v.color || 'Common';
-    if (!colorMap[colorKey]) {
-      colorMap[colorKey] = {
-        color: v.color,
-        colorCode: v.colorCode || '#000000',
-        images: v.image ? [v.image] : [],
-        sizes: []
-      };
-      groupedVariants.push(colorMap[colorKey]);
-    }
-    colorMap[colorKey].sizes.push({
-      size: v.size,
-      stock: v.stock || 0
-    });
-    // Ensure we don't duplicate primary images if already present
-    if (v.image && !colorMap[colorKey].images.includes(v.image)) {
-      colorMap[colorKey].images.push(v.image);
-    }
-  });
+  if (Array.isArray(data.variants)) {
+    // Check if it's already hierarchical [{ color, sizes: [...] }]
+    const isHierarchical = data.variants.length > 0 && Array.isArray(data.variants[0].sizes);
 
-  // 2. Extract unique sizes
-  const allSizes = [...new Set((data.variants || []).map(v => v.size))];
+    if (isHierarchical) {
+      variants = data.variants.map(v => ({
+        color: v.color || "",
+        colorCode: v.colorCode || "#000000",
+        images: normalizeImages(v.images),
+        sizes: Array.isArray(v.sizes) ? v.sizes : []
+      }));
+    } else {
+      // Group flat variants by color
+      const colorMap = {};
+      data.variants.forEach(v => {
+        const colorKey = v.color || 'Common';
+        if (!colorMap[colorKey]) {
+          colorMap[colorKey] = {
+            color: v.color,
+            colorCode: v.colorCode || '#000000',
+            images: isUsableImageValue(v.image) ? [v.image] : [],
+            sizes: []
+          };
+          variants.push(colorMap[colorKey]);
+        }
+        colorMap[colorKey].sizes.push({
+          size: v.size,
+          stock: v.stock || 0
+        });
+        if (v.image && !colorMap[colorKey].images.includes(v.image)) {
+          colorMap[colorKey].images.push(v.image);
+        }
+      });
+    }
+  }
 
   return {
     ...defaultForm,
     ...data,
     _id: data._id,
     title: data.name || data.title || "",
-    category: typeof data.category === 'object' ? (data.category?.main || 'men').toLowerCase() : data.category,
-    sizes: allSizes,
-    variants: groupedVariants.length > 0 ? groupedVariants : defaultForm.variants,
+    category: data.category?._id || data.category || "",
+    subcategory: data.subcategory || "",
+    gender: data.gender || "men",
+    colors: data.colors || [],
+    sizes: data.sizes || [],
+    variants: variants.length > 0 ? variants : defaultForm.variants,
     trending: !!data.isTrending,
-    video: data.video || defaultForm.video
+    offer: {
+      title: data.offer?.title || "",
+      discount: data.offer?.discount || "",
+      couponCode: data.offer?.couponCode || "",
+      startDate: toDateInputValue(data.offer?.startDate),
+      expiryDate: toDateInputValue(data.offer?.expiryDate),
+      enabled: !!data.offer?.isActive || !!data.offer?.enabled || false
+    },
+    video: typeof data.video === 'string' ? { url: data.video, publicId: null, size: 0 } : (data.video || defaultForm.video)
   };
 };
 
 export default function ProductsForm({ initialData, onSuccess, onCancel }) {
   const [formData, setFormData] = useState(() => normalizeProductForForm(initialData));
+  const [categories, setCategories] = useState([]);
   const [activeTab, setActiveTab ] = useState('general');
   const [isSaving, setIsSaving] = useState(false);
-  const [previews, setPreviews] = useState({}); // { variantIndex: [urls] }
+  const [saveError, setSaveError] = useState("");
+  const savingRef = useRef(false);
 
-  // --------------------------------------------------------------------------
-  // DERIVED STATE & MEMOS
-  // --------------------------------------------------------------------------
-
+  /* ---------------- DERIVED ---------------- */
   const discount = useMemo(() => {
     if (formData.originalPrice <= 0) return 0;
     const diff = formData.originalPrice - formData.price;
@@ -121,19 +302,48 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
 
   const isValid = useMemo(() => {
     const { title, price, category, sizes, variants } = formData;
-    if (!title || price <= 0 || !category || sizes.length === 0 || variants.length === 0) return false;
     
-    // Check variants
-    return variants.every(v => 
-      v.color && 
-      v.images.length > 0 && 
-      v.sizes.length > 0
-    );
+    // Support both ID string and populated object
+    const hasCategory = category && (typeof category === 'string' ? category.length > 0 : !!category._id);
+    const hasTitle = title && title.trim().length > 0;
+    const hasPrice = price > 0;
+    const hasSizes = sizes && sizes.length > 0;
+    const hasVariants = variants && variants.length > 0 && variants.every(v => v.color && v.sizes.some(s => s.stock >= 0));
+
+    return !!(hasTitle && hasPrice && hasCategory && hasSizes && hasVariants);
   }, [formData]);
 
-  // --------------------------------------------------------------------------
-  // HANDLERS
-  // --------------------------------------------------------------------------
+  /* ---------------- FETCH CATEGORIES ---------------- */
+  useEffect(() => {
+    let mounted = true;
+    const fetchCats = async () => {
+      try {
+        const res = await api.get(ENDPOINTS.CATEGORIES.BASE);
+        if (res.status !== 200) throw new Error("API failed");
+        
+        const allCats = res?.data?.data || res?.data || [];
+        if (mounted) setCategories(allCats);
+      } catch (err) {
+        console.error("CAT_LOAD_ERR:", err);
+        toast.error("Failed to load category metadata");
+      }
+    };
+    fetchCats();
+    return () => { mounted = false; };
+  }, []);
+
+  const filteredCategories = useMemo(() => {
+    return categories.filter(c => c.gender === formData.gender);
+  }, [categories, formData.gender]);
+
+  /* ---------------- DYNAMIC SIZES ---------------- */
+  const availableSizes = useMemo(() => {
+    const selectedCat = categories.find(c => c._id === formData.category);
+    if (selectedCat) return selectedCat.sizes || [];
+    
+    // Fallback to constants if no category selected
+    return SIZE_CHART[formData.subcategory] || [];
+  }, [formData.category, formData.subcategory, categories]);
 
   const updateField = useCallback((path, value) => {
     setFormData(prev => {
@@ -169,27 +379,87 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
     updateField('sizes', newSizes);
   };
 
+  const selectAllSizes = () => {
+    if (!availableSizes.length) {
+      toast.error("Select a category first");
+      return;
+    }
+
+    updateField('sizes', availableSizes);
+    toast.success("All sizes selected");
+  };
+
+  const fillVariantStock = (variantIndex) => {
+    const input = window.prompt("Enter quantity for all sizes", "1");
+    if (input === null) return;
+
+    const quantity = Number(input);
+    if (!Number.isFinite(quantity) || quantity < 0) {
+      toast.error("Enter a valid quantity");
+      return;
+    }
+
+    setFormData(prev => {
+      const newVariants = [...prev.variants];
+      newVariants[variantIndex] = {
+        ...newVariants[variantIndex],
+        sizes: newVariants[variantIndex].sizes.map(sizeRow => ({
+          ...sizeRow,
+          stock: quantity,
+        })),
+      };
+      return { ...prev, variants: newVariants };
+    });
+
+    toast.success("Quantity filled for all sizes");
+  };
+
+  const buildSku = (variant, index) => {
+    const prefix = (formData.title || "PRO").substring(0, 3).toUpperCase();
+    const selectedCategory = categories.find(c => c._id === formData.category);
+    const cat = String(selectedCategory?.name || formData.category || "CAT").substring(0, 2).toUpperCase();
+    const col = (variant.color || `C${index + 1}`).substring(0, 2).toUpperCase();
+    const rand = Math.floor(1000 + Math.random() * 9000);
+    return `${prefix}-${cat}-${col}-${rand}`;
+  };
+
+  const isUploading = useRef(false);
+
   const handleImageUpload = async (variantIndex, files) => {
-    const fileList = Array.from(files);
-    if (fileList.length === 0) return;
+    if (isUploading.current) return;
+    const file = Array.from(files || []).filter(Boolean)[0];
+    if (!file) return;
 
-    // Create local previews
-    const localPreviews = fileList.map(f => URL.createObjectURL(f));
-    setPreviews(prev => ({ ...prev, [variantIndex]: [...(prev[variantIndex] || []), ...localPreviews] }));
-
+    isUploading.current = true;
     try {
-      toast.loading("Uploading images...", { id: 'upload' });
-      const urls = await uploadMultipleImages(fileList);
+      toast.loading("Uploading image...", { id: 'upload' });
+      const url = await uploadImage(file);
+      const detectedColor = await detectDominantImageColor(url);
       
       setFormData(prev => {
         const newVariants = [...prev.variants];
-        newVariants[variantIndex].images = [...newVariants[variantIndex].images, ...urls];
+        const currentImages = Array.isArray(newVariants[variantIndex].images)
+          ? newVariants[variantIndex].images
+          : [];
+
+        if (detectedColor) {
+          newVariants[variantIndex].color = detectedColor.name;
+          newVariants[variantIndex].colorCode = detectedColor.hex;
+        }
+
+        if (!currentImages.includes(url)) {
+          newVariants[variantIndex].images = [...currentImages, url];
+        }
+
         return { ...prev, variants: newVariants };
       });
       
-      toast.success("Uploaded successfully", { id: 'upload' });
+      toast.success(detectedColor ? `Image uploaded, ${detectedColor.name} selected` : "Image uploaded", { id: 'upload' });
     } catch (err) {
-      toast.error("Upload failed", { id: 'upload' });
+      console.error("[UPLOAD_ERROR]", err);
+      toast.error("Upload failed: " + err.message, { id: 'upload' });
+    } finally {
+      isUploading.current = false;
     }
   };
 
@@ -202,20 +472,21 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
   };
 
   const generateSKU = (variantIndex) => {
-    const { title, category, subcategory, variants } = formData;
-    const variant = variants[variantIndex];
-    const prefix = title.substring(0, 3).toUpperCase();
-    const cat = category.substring(0, 1).toUpperCase();
-    const sub = subcategory.substring(0, 2).toUpperCase();
-    const col = (variant.color || "XX").substring(0, 2).toUpperCase();
-    const rand = Math.floor(1000 + Math.random() * 9000);
-    
-    const sku = `${prefix}-${cat}${sub}-${col}-${rand}`;
-    
     const newVariants = [...formData.variants];
-    newVariants[variantIndex].sku = sku;
+    newVariants[variantIndex].sku = buildSku(newVariants[variantIndex], variantIndex);
     updateField('variants', newVariants);
     toast.success("SKU Generated");
+  };
+
+  const generateAllSkus = () => {
+    setFormData(prev => ({
+      ...prev,
+      variants: prev.variants.map((variant, index) => ({
+        ...variant,
+        sku: buildSku(variant, index),
+      })),
+    }));
+    toast.success("SKU generated for all variants");
   };
 
   const addVariant = () => {
@@ -239,7 +510,6 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
   };
 
   const [videoFile, setVideoFile] = useState(null);
-  const [imageFile, setImageFile] = useState(null);
 
   const handleVideoUpload = (file) => {
     if (!file) return;
@@ -276,90 +546,90 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (savingRef.current) return;
     if (!isValid) return toast.error("Please complete the form properly");
 
+    setSaveError("");
+    savingRef.current = true;
     setIsSaving(true);
+    toast.loading(initialData?._id ? "Updating product..." : "Creating product...", { id: 'save' });
 
     try {
-      const allImages = formData.variants.flatMap(v => v.images);
-      
-      const flatVariants = formData.variants.flatMap(v => 
-        v.sizes.map(sz => {
-          const baseSku = v.sku || `${formData.title.substring(0, 3).toUpperCase()}-${(v.color || 'XX').substring(0, 2).toUpperCase()}`;
-          const uniqueSku = `${baseSku}-${sz.size}-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
-          return {
-            sku: uniqueSku,
-            color: v.color,
-            size: sz.size,
-            price: Number(formData.price) || 0,
-            stock: Number(sz.stock) || 0,
-            image: v.images[0] || ""
-          };
-        })
-      ).filter(v => v.size);
+      // 1. UPLOAD VIDEO FIRST (IF LOCAL)
+      let finalVideoUrl = formData.video?.url || "";
+      if (videoFile) {
+        const vResult = await uploadProductVideo(videoFile);
+        finalVideoUrl = vResult.url;
+      }
 
+      // 2. CONSTRUCT CLEAN JSON PAYLOAD
+      const allImages = formData.variants.flatMap(v => v.images);
+      const cleanImages = normalizePersistedImages(allImages);
+
+      if (!cleanImages.length) {
+        throw new Error("Please upload at least one product image before saving");
+      }
+      
       const fullPayload = {
         name: formData.title,
         description: formData.description,
-        category: typeof formData.category === 'object' ? (formData.category?.main || "men").toLowerCase() : formData.category,
-        subcategory: formData.subcategory,
-        productType: formData.productType,
+        category: formData.category,
+        subcategory: formData.subcategory || "",
+        gender: formData.gender,
+        colors: [...new Set(formData.variants.map(v => v.color).filter(Boolean))],
+        sizes: formData.sizes,
+        productType: formData.productType || "standard",
         price: Number(formData.price),
         originalPrice: Number(formData.originalPrice),
-        images: allImages,
-        primaryImage: allImages[0] || "",
-        hoverImage: allImages[1] || allImages[0] || "",
-        variants: flatVariants,
+        images: cleanImages,
+        primaryImage: cleanImages[0] || "",
+        hoverImage: cleanImages[1] || cleanImages[0] || "",
+        variants: formData.variants.map(v => ({
+          color: v.color,
+          colorCode: v.colorCode,
+          sku: v.sku || "",
+          images: normalizePersistedImages(v.images),
+          sizes: v.sizes.map(s => ({
+            size: s.size,
+            stock: Number(s.stock) || 0
+          }))
+        })),
         status: formData.status,
         featured: !!formData.featured,
         isTrending: !!formData.trending,
         isBestSeller: !!formData.isBestSeller,
-        stock: flatVariants.reduce((sum, v) => sum + v.stock, 0),
         badge: formData.badge,
         offer: formData.offer,
         controls: formData.controls,
-        video: videoFile ? undefined : formData.video // Don't send old video object if new file exists
+        video: finalVideoUrl // Send as string
       };
-
-      // 3. MULTIPART SUBMISSION
-      const formDataToSend = new FormData();
-      
-      // Append non-file fields
-      Object.keys(fullPayload).forEach(key => {
-        if (fullPayload[key] === undefined) return;
-        if (typeof fullPayload[key] === 'object') {
-          formDataToSend.append(key, JSON.stringify(fullPayload[key]));
-        } else {
-          formDataToSend.append(key, fullPayload[key]);
-        }
-      });
-
-      // Append files
-      if (videoFile) {
-        formDataToSend.append('video', videoFile);
-      }
-      // If we had a primary image file, we'd append it here too
-      // if (imageFile) formDataToSend.append('image', imageFile);
 
       const method = initialData?._id ? 'put' : 'post';
       const endpoint = initialData?._id ? `/admin/products/${initialData._id}` : '/admin/products';
-      
-      const res = await api[method](endpoint, formDataToSend, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
+
+      const res = await api[method](endpoint, fullPayload);
       
       if (res.data.success) {
-        toast.success(initialData?._id ? "Product updated!" : "Product created!");
+        toast.success(initialData?._id ? "Product updated!" : "Product created!", { id: 'save' });
         onSuccess?.();
       } else {
-        toast.error(res.data.message || "Failed to save product");
+        const message = res.data.message || "Failed to save product";
+        setSaveError(message);
+        toast.error(message, { id: 'save' });
       }
     } catch (err) {
       console.error("[PRODUCT_SUBMIT_ERROR]", err);
-      const errorMsg = err.response?.data?.message || err.message || "Operation failed";
-      toast.error(errorMsg);
+      const errorMsg =
+        err.response?.data?.message ||
+        (err.code === "BACKEND_UNREACHABLE"
+          ? "Backend connection failed. Please check that the API server is running."
+          : err.message) ||
+        "Operation failed";
+      setSaveError(errorMsg);
+      toast.error(errorMsg, { id: 'save' });
     } finally {
       setIsSaving(false);
+      savingRef.current = false;
     }
   };
 
@@ -372,7 +642,7 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
       case 'general':
         return (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="grid grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-6">
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Product Name</label>
                 <input 
@@ -384,42 +654,32 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
                   required
                 />
               </div>
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Product Type</label>
-                <input 
-                  type="text"
-                  value={formData.productType}
-                  onChange={e => updateField('productType', e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-slate-900 transition-all font-medium"
-                  placeholder="e.g. Cotton Blend"
-                />
-              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-6">
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Category</label>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Gender</label>
                 <select 
-                  value={typeof formData.category === 'object' ? formData.category?.main?.toLowerCase() || 'men' : formData.category || 'men'}
-                  onChange={e => updateField('category', e.target.value)}
+                  value={formData.gender || 'unisex'}
+                  onChange={e => updateField('gender', e.target.value)}
                   className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-slate-900 transition-all font-medium"
                 >
-                  {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  <option value="men">Men</option>
+                  <option value="women">Women</option>
                 </select>
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Subcategory</label>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Category</label>
                 <select 
-                  value={formData.subcategory}
-                  onChange={e => updateField('subcategory', e.target.value)}
+                  value={formData.category}
+                  onChange={e => {
+                    updateField('category', e.target.value);
+                    updateField('sizes', []); 
+                  }}
                   className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-slate-900 transition-all font-medium"
                 >
-                  {(() => {
-                    const catString = typeof formData.category === 'object' 
-                      ? formData.category?.main?.toLowerCase() || 'men' 
-                      : formData.category || 'men';
-                    return (SUBCATEGORIES[catString] || []).map(s => <option key={s} value={s}>{s.toUpperCase()}</option>);
-                  })()}
+                  <option value="">Select Category</option>
+                  {filteredCategories.map(c => <option key={c._id} value={c._id}>{c.name}</option>)}
                 </select>
               </div>
             </div>
@@ -431,8 +691,10 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold">₹</span>
                   <input 
                     type="number"
-                    value={formData.originalPrice}
-                    onChange={e => updateField('originalPrice', Number(e.target.value))}
+                    min="0"
+                    inputMode="decimal"
+                    value={numberInputValue(formData.originalPrice)}
+                    onChange={e => updateField('originalPrice', parseNumberInput(e.target.value))}
                     className="w-full pl-10 pr-4 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-slate-900 transition-all font-medium"
                   />
                 </div>
@@ -443,8 +705,10 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold">₹</span>
                   <input 
                     type="number"
-                    value={formData.price}
-                    onChange={e => updateField('price', Number(e.target.value))}
+                    min="0"
+                    inputMode="decimal"
+                    value={numberInputValue(formData.price)}
+                    onChange={e => updateField('price', parseNumberInput(e.target.value))}
                     className="w-full pl-10 pr-4 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-slate-900 transition-all font-medium"
                   />
                 </div>
@@ -452,9 +716,18 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
             </div>
 
             <div className="space-y-2">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Available Sizes</label>
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex justify-between">
+                Available Sizes
+                <button
+                  type="button"
+                  onClick={selectAllSizes}
+                  className="text-[9px] text-indigo-600 font-black uppercase tracking-widest hover:text-slate-900"
+                >
+                  Select All
+                </button>
+              </label>
               <div className="flex flex-wrap gap-2">
-                {(SIZE_CHART[formData.subcategory] || []).map(sz => (
+                {availableSizes.map(sz => (
                   <button
                     key={sz}
                     type="button"
@@ -502,7 +775,7 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
                {formData.video?.url ? (
                  <div className="relative aspect-video rounded-3xl overflow-hidden shadow-2xl border border-white">
                     <video 
-                      src={formData.video.url} 
+                      src={resolveVideoUrl(formData.video.url)} 
                       className="w-full h-full object-cover"
                       controls
                     />
@@ -531,18 +804,27 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="flex justify-between items-center">
               <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400">Variant Matrix</h3>
-              <button 
-                type="button" 
-                onClick={addVariant}
-                className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-all shadow-lg"
-              >
-                <Plus size={14} /> Add Color
-              </button>
+              <div className="flex items-center gap-2">
+                <button 
+                  type="button" 
+                  onClick={generateAllSkus}
+                  className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-900 rounded-xl text-xs font-bold hover:border-slate-900 transition-all"
+                >
+                  <RefreshCcw size={14} /> SKU All
+                </button>
+                <button 
+                  type="button" 
+                  onClick={addVariant}
+                  className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-all shadow-lg"
+                >
+                  <Plus size={14} /> Add Color
+                </button>
+              </div>
             </div>
 
             <div className="space-y-12">
               {formData.variants.map((variant, vIdx) => (
-                <div key={vIdx} className="p-8 bg-white border border-slate-100 rounded-[2.5rem] shadow-xl shadow-slate-100/50 space-y-8 group relative">
+                <div key={vIdx} className="p-5 bg-white border border-slate-100 rounded-3xl shadow-lg shadow-slate-100/50 space-y-5 group relative">
                   <button 
                     type="button"
                     onClick={() => removeVariant(vIdx)}
@@ -551,19 +833,21 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
                     <Trash2 size={16} />
                   </button>
 
-                  <div className="grid grid-cols-2 gap-8">
-                    <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-5">
+                    <div className="space-y-3">
                       <div className="space-y-2">
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Color Name</label>
                         <input 
                           type="text"
                           value={variant.color}
                           onChange={e => {
+                            const colorName = e.target.value;
                             const newVariants = [...formData.variants];
-                            newVariants[vIdx].color = e.target.value;
+                            newVariants[vIdx].color = colorName;
+                            newVariants[vIdx].colorCode = resolveColorHex(colorName, newVariants[vIdx].colorCode || "#000000");
                             updateField('variants', newVariants);
                           }}
-                          className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-slate-900 transition-all font-medium"
+                          className="w-full px-4 py-2.5 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-slate-900 transition-all font-medium"
                           placeholder="e.g. Jet Black"
                         />
                       </div>
@@ -578,7 +862,7 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
                               newVariants[vIdx].colorCode = e.target.value;
                               updateField('variants', newVariants);
                             }}
-                            className="w-12 h-12 rounded-xl cursor-pointer border-none bg-transparent"
+                            className="w-10 h-10 rounded-xl cursor-pointer border-none bg-transparent"
                           />
                           <span className="text-xs font-mono font-bold text-slate-500 uppercase">{variant.colorCode}</span>
                         </div>
@@ -602,27 +886,39 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
                             newVariants[vIdx].sku = e.target.value;
                             updateField('variants', newVariants);
                           }}
-                          className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-slate-900 transition-all font-mono text-xs"
+                          className="w-full px-4 py-2.5 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-slate-900 transition-all font-mono text-xs"
                           placeholder="SKU-XXXX-XXXX"
                         />
                       </div>
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Stock per Size</label>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex justify-between">
+                        Stock per Size
+                        <button
+                          type="button"
+                          onClick={() => fillVariantStock(vIdx)}
+                          className="text-[9px] text-indigo-600 font-black uppercase tracking-widest hover:text-slate-900"
+                        >
+                          Fill All Qty
+                        </button>
+                      </label>
                       <div className="grid grid-cols-2 gap-2">
                         {variant.sizes.map((sz, sIdx) => (
-                          <div key={sIdx} className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl">
-                            <span className="w-8 h-8 flex items-center justify-center bg-white rounded-lg text-[10px] font-black">{sz.size}</span>
+                          <div key={sIdx} className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl">
+                            <span className="w-7 h-7 flex items-center justify-center bg-white rounded-lg text-[10px] font-black">{sz.size}</span>
                             <input 
                               type="number"
-                              value={sz.stock}
+                              min="0"
+                              inputMode="numeric"
+                              value={numberInputValue(sz.stock)}
                               onChange={e => {
                                 const newVariants = [...formData.variants];
-                                newVariants[vIdx].sizes[sIdx].stock = Number(e.target.value);
+                                newVariants[vIdx].sizes[sIdx].stock = parseNumberInput(e.target.value);
                                 updateField('variants', newVariants);
                               }}
                               className="w-full bg-transparent border-none text-xs font-bold focus:ring-0 p-0"
+                              placeholder="Qty"
                             />
                           </div>
                         ))}
@@ -633,26 +929,40 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
                   <div className="space-y-4">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Images</label>
                     <div className="grid grid-cols-4 gap-4">
-                      {variant.images.map((img, iIdx) => (
-                        <div key={iIdx} className="relative aspect-square rounded-2xl overflow-hidden border border-slate-100 group/img shadow-sm hover:shadow-md transition-all">
-                          <img src={img} alt="" className="w-full h-full object-cover" />
-                          <button 
-                            type="button"
-                            onClick={() => removeImage(vIdx, iIdx)}
-                            className="absolute top-2 right-2 p-1 bg-black/50 text-white rounded-full opacity-0 group-hover/img:opacity-100 transition-all hover:bg-black"
-                          >
-                            <X size={12} />
-                          </button>
-                        </div>
-                      ))}
+                      {variant.images.map((img, iIdx) => {
+                        const finalUrl = resolveImageUrl(img);
+                        return (
+                          <div key={iIdx} className="relative aspect-square rounded-2xl overflow-hidden border border-slate-100 group/img shadow-sm hover:shadow-md transition-all">
+                            <img 
+                              src={finalUrl} 
+                              alt={`Product ${iIdx}`} 
+                              className="w-full h-full object-cover" 
+                              onError={(e) => {
+                                console.error(">>> [IMAGE_LOAD_FAIL]", finalUrl);
+                                e.currentTarget.src = FALLBACK_IMAGE_URL;
+                              }}
+                            />
+                            <button 
+                              type="button"
+                              onClick={() => removeImage(vIdx, iIdx)}
+                              className="absolute top-2 right-2 p-1 bg-black/50 text-white rounded-full opacity-0 group-hover/img:opacity-100 transition-all hover:bg-black"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        );
+                      })}
                       <label className="aspect-square flex flex-col items-center justify-center border-2 border-dashed border-slate-200 rounded-2xl cursor-pointer hover:border-slate-900 hover:bg-slate-50 transition-all text-slate-400 hover:text-slate-900 group/upload">
                         <Upload size={20} className="mb-2 group-hover/upload:scale-110 transition-transform" />
                         <span className="text-[10px] font-bold uppercase tracking-widest">Upload</span>
                         <input 
                           type="file" 
-                          multiple 
+                          accept="image/jpeg,image/png,image/webp,image/avif"
                           className="hidden" 
-                          onChange={e => handleImageUpload(vIdx, e.target.files)} 
+                          onChange={e => {
+                            handleImageUpload(vIdx, e.target.files);
+                            e.target.value = "";
+                          }} 
                         />
                       </label>
                     </div>
@@ -725,11 +1035,49 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
                   <input 
                     type="text"
                     disabled={!formData.offer.enabled}
-                    value={formData.offer.text}
-                    onChange={e => updateField('offer.text', e.target.value)}
+                    value={formData.offer.title}
+                    onChange={e => updateField('offer.title', e.target.value)}
                     className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-slate-900 transition-all font-medium disabled:opacity-50"
-                    placeholder="e.g. BUY 2 GET 1 FREE"
+                    placeholder="Offer Title (e.g. BUY 2 GET 1 FREE)"
                   />
+                  <input 
+                    type="text"
+                    disabled={!formData.offer.enabled}
+                    value={formData.offer.discount}
+                    onChange={e => updateField('offer.discount', e.target.value)}
+                    className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-slate-900 transition-all font-medium disabled:opacity-50 mt-2"
+                    placeholder="Discount (e.g. 50% OFF)"
+                  />
+                  <input 
+                    type="text"
+                    disabled={!formData.offer.enabled}
+                    value={formData.offer.couponCode}
+                    onChange={e => updateField('offer.couponCode', e.target.value)}
+                    className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-slate-900 transition-all font-medium disabled:opacity-50 mt-2"
+                    placeholder="Coupon Code (e.g. SUMMER50)"
+                  />
+                  <div className="flex gap-4 mt-2">
+                    <div className="flex-1 space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Start Date</label>
+                      <input 
+                        type="date"
+                        disabled={!formData.offer.enabled}
+                        value={formData.offer.startDate}
+                        onChange={e => updateField('offer.startDate', e.target.value)}
+                        className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-slate-900 transition-all font-medium disabled:opacity-50"
+                      />
+                    </div>
+                    <div className="flex-1 space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Expiry Date</label>
+                      <input 
+                        type="date"
+                        disabled={!formData.offer.enabled}
+                        value={formData.offer.expiryDate}
+                        onChange={e => updateField('offer.expiryDate', e.target.value)}
+                        className="w-full px-4 py-3 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-slate-900 transition-all font-medium disabled:opacity-50"
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -807,12 +1155,12 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
     <div className="flex h-full gap-8 p-8 bg-slate-50 overflow-hidden">
       {/* LEFT FORM AREA */}
       <div className="flex-1 overflow-y-auto pr-4 scrollbar-hide">
-        <form onSubmit={handleSubmit} className="space-y-8 bg-white rounded-[3rem] p-10 shadow-2xl shadow-slate-200/50">
+        <form onSubmit={handleSubmit} className="admin-card space-y-6 p-4 md:p-6">
           {/* Header & Tabs */}
           <div className="flex flex-col gap-8">
             <div className="flex justify-between items-center">
               <div>
-                <h1 className="text-3xl font-black text-slate-900 tracking-tight">
+                <h1 className="admin-heading">
                   {initialData?._id ? "Edit Product" : "Create Product"}
                 </h1>
                 <p className="text-slate-400 font-medium mt-1">Configure your product catalog item</p>
@@ -821,14 +1169,14 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
                 <button 
                   type="button" 
                   onClick={onCancel}
-                  className="px-6 py-3 border border-slate-200 rounded-2xl text-sm font-bold text-slate-500 hover:bg-slate-50 transition-all"
+                  className="px-4 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-50 transition-all"
                 >
                   Cancel
                 </button>
                 <button 
                   type="submit" 
                   disabled={isSaving || !isValid}
-                  className="px-8 py-3 bg-slate-900 text-white rounded-2xl text-sm font-extrabold flex items-center gap-2 shadow-xl shadow-slate-900/10 hover:shadow-slate-900/20 active:scale-95 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-extrabold flex items-center gap-2 shadow-lg shadow-slate-900/10 hover:shadow-slate-900/20 active:scale-95 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
                 >
                   {isSaving ? <RefreshCcw className="animate-spin" size={18} /> : <Save size={18} />}
                   <span>{initialData?._id ? "Update Product" : "Launch Product"}</span>
@@ -836,7 +1184,7 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
               </div>
             </div>
 
-            <nav className="flex gap-2 p-2 bg-slate-100/50 rounded-2xl w-fit">
+            <nav className="flex gap-2 p-1.5 bg-slate-100/50 rounded-xl w-fit">
               {TABS.map(tab => {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
@@ -868,6 +1216,18 @@ export default function ProductsForm({ initialData, onSuccess, onCancel }) {
                   [!formData.title && "Title", formData.price <= 0 && "Price", formData.sizes.length === 0 && "Sizes", formData.variants.some(v => !v.color || v.images.length === 0) && "Variants Data"].filter(Boolean).join(", ")
                 }
               </p>
+            </div>
+          )}
+
+          {saveError && (
+            <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-100 rounded-2xl">
+              <AlertCircle size={18} className="text-red-600 mt-0.5" />
+              <div>
+                <p className="text-[10px] font-black text-red-900 uppercase tracking-widest">
+                  Product save failed
+                </p>
+                <p className="text-xs font-bold text-red-700 mt-1">{saveError}</p>
+              </div>
             </div>
           )}
 

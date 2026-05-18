@@ -1,21 +1,19 @@
 const SibApiV3Sdk = require("sib-api-v3-sdk");
 const { logger } = require("./logger");
 const env = require("../config/env");
+const {
+  otpEmail,
+  orderAdminEmail,
+  productAnnouncementEmail,
+} = require("./emailTemplates");
 
 // 1. Initial configuration check
 const apiKeyVal = env.BREVO_API_KEY;
 if (!apiKeyVal) {
   logger.error("[BREVO CRITICAL] BREVO_API_KEY is missing from environment config!");
 } else {
-  const safeStr = typeof apiKeyVal === "string" ? apiKeyVal : String(apiKeyVal);
-  logger.info(`[BREVO CONFIG] API Key loaded (starts with: ${safeStr.substring(0, 10)}...)`);
+  logger.info(`[BREVO CONFIG] API Key loaded`);
 }
-
-const defaultClient = SibApiV3Sdk.ApiClient.instance;
-const apiKey = defaultClient.authentications["api-key"];
-apiKey.apiKey = apiKeyVal;
-
-const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
 
 /**
  * Utility: Extract Name and Email from MAIL_FROM
@@ -29,11 +27,31 @@ const getSenderInfo = () => {
   return { name: "Doller Coach", email: mailFrom.trim() };
 };
 
+const getAdminEmail = () =>
+  process.env.ADMIN_EMAIL ||
+  env.COMPANY_EMAIL ||
+  getSenderInfo().email;
+
 const isValidEmail = (email) => {
   return typeof email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 };
 
-const { emailQueue } = require("../services/queue.service");
+const getProviderError = (error) => {
+  if (error?.response?.body) return JSON.stringify(error.response.body);
+  if (error?.body) return JSON.stringify(error.body);
+  if (Array.isArray(error?.errors) && error.errors.length) {
+    return error.errors
+      .map((item) => `${item.code || item.name || "ERROR"} ${item.address || ""}:${item.port || ""}`.trim())
+      .join("; ");
+  }
+  return error?.message || String(error || "Unknown email provider error");
+};
+
+const getBrevoClient = () => {
+  const defaultClient = SibApiV3Sdk.ApiClient.instance;
+  defaultClient.authentications["api-key"].apiKey = env.BREVO_API_KEY;
+  return new SibApiV3Sdk.TransactionalEmailsApi();
+};
 
 /**
  * CORE: Unified Send Email Function
@@ -48,34 +66,34 @@ const sendEmailCore = async ({ to, bcc, subject, html, attachments }) => {
     if (!recipient) throw new Error("Recipient email is missing");
     if (!isValidEmail(recipient)) throw new Error(`Invalid email format: ${recipient}`);
 
-    const sender = getSenderInfo();
-    const sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail();
-    
-    sendSmtpEmail.sender = sender;
-    sendSmtpEmail.to = [{ email: recipient }];
+    if (!env.BREVO_API_KEY) throw new Error("BREVO_API_KEY is missing");
 
+    const sender = getSenderInfo();
+    const email = new SibApiV3Sdk.SendSmtpEmail();
+
+    email.sender = sender;
+    email.to = [{ email: recipient }];
+    email.subject = subject;
+    email.htmlContent = html;
+    
     if (bcc && Array.isArray(bcc) && bcc.length) {
-      sendSmtpEmail.bcc = bcc.filter(isValidEmail).map(email => ({ email }));
+      email.bcc = bcc.filter(isValidEmail).map((emailAddress) => ({ email: emailAddress }));
     }
 
-    sendSmtpEmail.subject = subject;
-    sendSmtpEmail.htmlContent = html;
-
     if (attachments && Array.isArray(attachments) && attachments.length) {
-      sendSmtpEmail.attachment = attachments.map(att => ({
-        content: Buffer.isBuffer(att.content) ? att.content.toString("base64") : att.content,
-        name: att.filename || "document.pdf"
+      email.attachment = attachments.map((attachment) => ({
+        name: attachment.filename || "document.pdf",
+        content: Buffer.isBuffer(attachment.content)
+          ? attachment.content.toString("base64")
+          : attachment.content,
       }));
     }
 
-    const result = await apiInstance.sendTransacEmail(sendSmtpEmail);
-    logger.info(`[Brevo SUCCESS][${requestId}] MessageID: ${result.messageId}`);
+    const result = await getBrevoClient().sendTransacEmail(email);
+    logger.info(`[Brevo SUCCESS][${requestId}] MessageID: ${result?.messageId || result?.body?.messageId || "sent"}`);
     return result;
   } catch (error) {
-    let errorDetail = error.message;
-    if (error.response && error.response.body) {
-      errorDetail = JSON.stringify(error.response.body);
-    }
+    const errorDetail = getProviderError(error);
     logger.error(`[Brevo ERROR][${requestId}] Failed for ${recipient}: ${errorDetail}`);
     throw error;
   }
@@ -86,17 +104,32 @@ const sendEmailCore = async ({ to, bcc, subject, html, attachments }) => {
  */
 const queueEmail = async (payload) => {
   try {
-    const job = await emailQueue.add("send-email", payload);
-    // If Redis is down or job wasn't created, queue.service bypasses and returns { id: "deferred" }
-    if (!job || job.id === "deferred") {
-       logger.warn("[EMAIL_QUEUE] Queue bypassing tasks. Activating direct send fallback.");
-       await sendEmailCore(payload);
+    if (env.NODE_ENV === "test" && process.env.EMAIL_TEST_MODE !== "real") {
+      logger.info("[EMAIL_TEST_MODE] Skipping provider delivery", {
+        to: payload?.to,
+        subject: payload?.subject,
+      });
+      return true;
     }
+
+    await sendEmailCore(payload);
+
+    // Queue is kept only as a best-effort audit/background copy. Delivery does not depend on Redis/worker.
+    if (env.REDIS_ENABLED && env.ENABLE_QUEUE) {
+      try {
+        const { emailQueue } = require("../services/queue.service");
+        emailQueue.add("send-email", payload).catch((error) => {
+          logger.warn("[EMAIL_QUEUE_AUDIT_SKIP]", { error: error.message });
+        });
+      } catch (queueError) {
+        logger.warn("[EMAIL_QUEUE_AUDIT_SKIP]", { error: queueError.message });
+      }
+    }
+
     return true;
   } catch (error) {
-    logger.error("[EMAIL_QUEUE] Add to queue failed. Activating direct send fallback.", { error: error.message });
-    // Fallback if queueing fails completely
-    return sendEmailCore(payload).catch(e => logger.error("Email Direct Fallback Failed", { error: e.message }));
+    logger.error("[EMAIL_SEND_FAILED]", { error: error.message, to: payload?.to, subject: payload?.subject });
+    throw error;
   }
 };
 
@@ -114,7 +147,7 @@ const sendEmailSafe = async (data) => {
       ),
     ]);
   } catch (err) {
-    logger.error("⚡ EMAIL_SEND_FAILURE_SAFE_MODE:", err.message);
+    logger.error("EMAIL_SEND_FAILURE_SAFE_MODE:", err.message);
   }
 };
 
@@ -126,20 +159,50 @@ const SECONDARY_COLOR = "#999999";
 /**
  * Pre-configured template for sending New Product Alerts
  */
+const sendOtpEmail = async ({ to, name, otp, minutes }) => {
+  return queueEmail({
+    to,
+    subject: "Verify your Doller Coach email",
+    html: otpEmail({ name, otp, minutes }),
+  });
+};
+
+const sendAdminOrderEmail = async ({ order, customer }) => {
+  return queueEmail({
+    to: getAdminEmail(),
+    subject: `New order received - ${order?.invoiceNumber || order?._id || "Doller Coach"}`,
+    html: orderAdminEmail({ order, customer }),
+  });
+};
+
+const sendNewProductAnnouncementEmail = async ({ product, recipients = [] }) => {
+  const cleanRecipients = [...new Set(recipients.filter(isValidEmail))];
+  if (!cleanRecipients.length) return false;
+
+  const shopUrl = `${process.env.FRONTEND_URL || env.CLIENT_URL || "http://localhost:3000"}/product/${product?._id || product?.id || ""}`;
+  const [to, ...bcc] = cleanRecipients;
+
+  return queueEmail({
+    to,
+    bcc,
+    subject: `New drop: ${product?.name || product?.title || "Doller Coach product"}`,
+    html: productAnnouncementEmail({ product, shopUrl }),
+  });
+};
+
 const sendNewProductEmail = async (product) => {
   try {
-    const adminEmail = getSenderInfo().email; // Route to admin by default
     return await queueEmail({
-      to: adminEmail,
-      subject: `New Product Added: ${product?.title || "Unknown"}`,
+      to: getAdminEmail(),
+      subject: `New Product Added: ${product?.name || product?.title || "Unknown"}`,
       html: `
         <div style="font-family: sans-serif; color: ${BRAND_COLOR};">
           <h2>New Product Added</h2>
           <p>A new product has been successfully added to your catalog.</p>
           <ul>
-            <li><strong>Name:</strong> ${product?.title}</li>
-            <li><strong>Price:</strong> $${product?.price}</li>
-            <li><strong>Category:</strong> ${product?.category}</li>
+            <li><strong>Name:</strong> ${product?.name || product?.title || "Unknown"}</li>
+            <li><strong>Price:</strong> Rs.${product?.price || 0}</li>
+            <li><strong>Category:</strong> ${product?.category?.name || product?.category || "General"}</li>
           </ul>
         </div>
       `
@@ -151,8 +214,12 @@ const sendNewProductEmail = async (product) => {
 };
 
 module.exports = {
-  sendEmail: queueEmail, // High-performance default
-  sendEmailImmediate: sendEmailCore, // For critical sync alerts
+  sendEmail: queueEmail,
+  sendEmailImmediate: sendEmailCore,
+  sendEmailSafe,
+  sendOtpEmail,
+  sendAdminOrderEmail,
+  sendNewProductAnnouncementEmail,
   sendNewProductEmail,
   BRAND_COLOR,
   SECONDARY_COLOR

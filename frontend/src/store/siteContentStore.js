@@ -26,33 +26,104 @@ const DEFAULT_CONTENT = {
   },
 };
 
+const CACHE_TIME = 5 * 60 * 1000;
+let contentRequest = null;
+
+/* ---------------- HELPERS ---------------- */
+const isPlainObject = (value) => {
+  return (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    !(value instanceof Date)
+  );
+};
+
+const unwrapContent = (response) => {
+  const body = response?.data ?? response;
+  const payload = body?.data ?? body?.content ?? body?.siteContent ?? body;
+
+  return isPlainObject(payload) ? payload : DEFAULT_CONTENT;
+};
+
 /* ---------------- DEEP MERGE ---------------- */
-const deepMerge = (target, source) => {
-  if (!source) return target;
-
-  // ✅ Arrays should be replaced entirely, not deep-merged
+const deepMerge = (target = {}, source = {}) => {
   if (Array.isArray(source)) return source;
+  if (!isPlainObject(source)) return target;
 
-  const output = { ...target };
+  const output = { ...(target || {}) };
 
   Object.keys(source).forEach((key) => {
     const srcVal = source[key];
-    const tgtVal = target[key];
+    const tgtVal = target?.[key];
 
-    if (
-      srcVal instanceof Object &&
-      !Array.isArray(srcVal) &&
-      tgtVal instanceof Object &&
-      !Array.isArray(tgtVal)
-    ) {
+    if (Array.isArray(srcVal)) {
+      output[key] = srcVal;
+      return;
+    }
+
+    if (isPlainObject(srcVal) && isPlainObject(tgtVal)) {
       output[key] = deepMerge(tgtVal, srcVal);
-    } else {
-      // Direct assignment for primitives and arrays
+      return;
+    }
+
+    if (srcVal !== undefined) {
       output[key] = srcVal;
     }
   });
 
   return output;
+};
+
+const cleanHeroCarousel = (slides) => {
+  if (!Array.isArray(slides)) return [];
+
+  return slides.map((slide, index) => ({
+    image: String(slide?.image || slide?.imageUrl || ""),
+    heading: String(slide?.heading || slide?.title || ""),
+    subheading: String(slide?.subheading || slide?.subtitle || ""),
+    order: Number(slide?.order ?? index) || 0,
+    offer: {
+      text: String(slide?.offer?.text || ""),
+      enabled: Boolean(slide?.offer?.enabled),
+      startDate: slide?.offer?.startDate || null,
+      endDate: slide?.offer?.endDate || null,
+    },
+  }));
+};
+
+const removeUndefinedDeep = (value) => {
+  if (Array.isArray(value)) {
+    return value.map(removeUndefinedDeep);
+  }
+
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  return Object.entries(value).reduce((acc, [key, val]) => {
+    if (val === undefined) return acc;
+
+    acc[key] = removeUndefinedDeep(val);
+    return acc;
+  }, {});
+};
+
+const cleanContentPayload = (payload = {}) => {
+  const cleanPayload = removeUndefinedDeep({
+    ...payload,
+    heroCarousel: Array.isArray(payload.heroCarousel)
+      ? cleanHeroCarousel(payload.heroCarousel)
+      : payload.heroCarousel,
+  });
+
+  Object.keys(cleanPayload).forEach((key) => {
+    if (cleanPayload[key] === undefined || cleanPayload[key] === null) {
+      delete cleanPayload[key];
+    }
+  });
+
+  return cleanPayload;
 };
 
 export const useSiteContentStore = create((set, get) => ({
@@ -65,46 +136,68 @@ export const useSiteContentStore = create((set, get) => ({
 
   /* ---------------- FETCH ---------------- */
   fetchContent: async (force = false) => {
-    const { isLoading, lastFetched } = get();
-    const isFresh = lastFetched && Date.now() - lastFetched < 5 * 60 * 1000;
+    const { isLoading, lastFetched, content } = get();
 
-    if (!force && (isLoading || isFresh)) return;
+    const isFresh =
+      lastFetched && Date.now() - lastFetched < CACHE_TIME;
+
+    if (!force && content && isFresh) return content;
+
+    if (!force && isLoading && contentRequest) {
+      return contentRequest;
+    }
 
     set({ isLoading: true, error: null });
 
-    try {
-      // ✅ Use the PUBLIC endpoint to avoid 401 redirect loops!
-      const res = await api.get("/site-content");
-      
-      // ✅ Properly unwrap envelope: res.data -> { success: true, data: { ... } }
-      const data = res?.data?.data || res?.data || DEFAULT_CONTENT;
-      const merged = deepMerge(DEFAULT_CONTENT, data);
+    contentRequest = api
+      .get(ENDPOINTS.CMS.SITE_CONTENT)
+      .then((res) => {
+        const data = unwrapContent(res);
+        const merged = deepMerge(DEFAULT_CONTENT, data);
 
-      set({
-        content: merged,
-        previewContent: merged,
-        isPreviewMode: false,
-        lastFetched: Date.now(),
+        set({
+          content: merged,
+          previewContent: merged,
+          isPreviewMode: false,
+          lastFetched: Date.now(),
+          error: null,
+        });
+
+        return merged;
+      })
+      .catch((err) => {
+        const message =
+          err?.response?.data?.message ||
+          err?.message ||
+          "Failed to load content";
+
+        set({ error: message });
+        toast.error("Failed to load site content");
+
+        return get().content || DEFAULT_CONTENT;
+      })
+      .finally(() => {
+        contentRequest = null;
+        set({ isLoading: false });
       });
-    } catch (err) {
-      console.error("Failed to load site content:", err);
-      set({ error: err?.response?.data?.message || "Failed to load content" });
-      toast.error("Failed to load site content");
-    } finally {
-      set({ isLoading: false });
-    }
+
+    return contentRequest;
   },
 
   /* ---------------- UPDATE ---------------- */
-  updateContent: async (payload) => {
+  updateContent: async (payload = {}) => {
+    if (!payload || typeof payload !== "object") {
+      toast.error("Invalid content payload");
+      return false;
+    }
+
     set({ isLoading: true, error: null });
 
     try {
-      // ✅ Use matched endpoint
-      const res = await api.put("/admin/site-content", payload);
+      const cleanPayload = cleanContentPayload(payload);
 
-      // ✅ Properly unwrap saving response
-      const updated = res?.data?.data || res?.data || null;
+      const res = await api.put(ENDPOINTS.CMS.SITE_CONTENT, cleanPayload);
+      const updated = unwrapContent(res);
 
       if (!updated) {
         throw new Error("Invalid update response");
@@ -117,14 +210,19 @@ export const useSiteContentStore = create((set, get) => ({
         previewContent: merged,
         isPreviewMode: false,
         lastFetched: Date.now(),
+        error: null,
       });
 
       toast.success("Content updated successfully");
       return true;
     } catch (err) {
-      const msg = err?.response?.data?.message || err?.message || "Failed to update content";
-      set({ error: msg });
-      toast.error(msg);
+      const message =
+        err?.response?.data?.message ||
+        err?.message ||
+        "Failed to update content";
+
+      set({ error: message });
+      toast.error(message);
       return false;
     } finally {
       set({ isLoading: false });
@@ -132,32 +230,40 @@ export const useSiteContentStore = create((set, get) => ({
   },
 
   /* ---------------- PREVIEW ---------------- */
-  updatePreview: (updates) => {
+  updatePreview: (updates = {}) => {
     set((state) => ({
-      previewContent: deepMerge(
-        state.previewContent,
-        updates
-      ),
+      previewContent: deepMerge(state.previewContent, updates),
       isPreviewMode: true,
     }));
   },
 
-  setPreviewMode: (enabled) =>
-    set({ isPreviewMode: enabled }),
+  setPreviewMode: (enabled) => {
+    set((state) => ({
+      isPreviewMode: Boolean(enabled),
+      previewContent: enabled ? state.previewContent : state.content,
+    }));
+  },
 
-  resetPreview: () =>
+  resetPreview: () => {
     set((state) => ({
       previewContent: state.content,
       isPreviewMode: false,
-    })),
+    }));
+  },
 
   /* ---------------- RESET ---------------- */
-  resetContent: () =>
+  resetContent: () => {
+    contentRequest = null;
+
     set({
       content: DEFAULT_CONTENT,
       previewContent: DEFAULT_CONTENT,
       isPreviewMode: false,
+      isLoading: false,
       error: null,
       lastFetched: null,
-    }),
+    });
+  },
 }));
+
+export default useSiteContentStore;

@@ -1,36 +1,11 @@
-const mongoose = require("mongoose");
-const { MongoMemoryServer } = require("mongodb-memory-server");
-
-let mongoServer;
+const connectDB = require("../config/db");
+const { getPool } = require("../config/mysql");
 
 beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create();
-  const mongoUri = mongoServer.getUri();
-
-  // If already connected, disconnect first
-  if (mongoose.connection.readyState !== 0) {
-    await mongoose.disconnect();
-  }
-
-  await mongoose.connect(mongoUri);
+  await connectDB();
+  await getPool().query("DELETE FROM mysql_documents");
 });
 
 afterAll(async () => {
-  if (mongoose.connection.readyState !== 0) {
-    await mongoose.disconnect();
-  }
-  if (mongoServer) {
-    await mongoServer.stop();
-  }
-});
-
-afterEach(async () => {
-  // Clear all collections after each test
-  if (mongoose.connection.readyState !== 0) {
-    const collections = mongoose.connection.collections;
-    for (const key in collections) {
-      const collection = collections[key];
-      await collection.deleteMany({});
-    }
-  }
+  await connectDB.close();
 });

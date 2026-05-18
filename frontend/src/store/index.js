@@ -1,16 +1,63 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { api, setAccessToken, clearAuth } from "../api/client";
+import { api, apiCall, safeApi, setAccessToken, clearAuth } from "../api/client";
 import { ENDPOINTS } from "../api/endpoints";
 import { mapUser, mapCartItem, mapProduct } from "../api/dynamicMapper";
 import toast from "react-hot-toast";
+
+const getBody = (res) => res?.data ?? res;
+const getPayload = (res) => {
+  const body = getBody(res);
+  return body?.data ?? body;
+};
+
+const getList = (res, key) => {
+  const payload = getPayload(res);
+
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.[key])) return payload[key];
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.products)) return payload.products;
+  if (Array.isArray(payload?.data)) return payload.data;
+
+  return [];
+};
+
+const getToken = () =>
+  localStorage.getItem("accessToken") || localStorage.getItem("token");
+
+const normalizeSession = (res) => {
+  const payload = getPayload(res);
+
+  const user =
+    payload?.user ||
+    payload?.data?.user ||
+    payload?.profile ||
+    null;
+
+  const token =
+    payload?.accessToken ||
+    payload?.token ||
+    payload?.data?.accessToken ||
+    payload?.data?.token ||
+    null;
+
+  return { user, token };
+};
+
+const persistToken = (token) => {
+  if (!token) return;
+  setAccessToken(token);
+  localStorage.setItem("token", token);
+  localStorage.setItem("accessToken", token);
+};
 
 /* =========================================================
    AUTH STORE
 ========================================================= */
 export const useAuthStore = create(
   persist(
-    (set, get) => ({
+    (set) => ({
       user: null,
       token: null,
       isAuthenticated: false,
@@ -26,51 +73,50 @@ export const useAuthStore = create(
       closeAuthModal: () => set({ isAuthModalOpen: false }),
 
       /* ---------------- LOGIN ---------------- */
-      login: async (payload, provider = "login") => {
+      login: async (payload = {}, provider = "login") => {
         set({ loading: true, error: null });
 
         try {
           const isAdmin =
-            payload.role === "admin" ||
-            String(provider).includes("admin");
+            payload.role === "admin" || String(provider).includes("admin");
 
           const endpoint = isAdmin
             ? ENDPOINTS.AUTH.ADMIN_LOGIN
             : `/auth/${provider}`;
 
-          const res = await api.post(endpoint, payload);
+          const res = await safeApi.post(endpoint, payload);
 
-          // 🛡️ Robust Response Mapping
-          // Our backend returns { success: true, data: { accessToken, user }, message: "" }
-          // Axios wraps this in res.data
-          const root = res?.data || res;
-          const data = root?.data || root; // Extract the inner 'data' if present
+          if (res?.success === false) {
+            throw new Error(res?.message || "Invalid login response from server");
+          }
 
-          const userData = data?.user;
-          const token = data?.accessToken || data?.token;
+          const { user, token } = normalizeSession(res);
 
-          if (!userData || !token) {
-            console.error("[AUTH_STORE] Invalid login structure:", { root, data });
+          if (!user || !token || typeof token !== "string") {
             throw new Error("Invalid login response from server");
           }
 
-          const isAdminUser = userData.role === "admin";
+          const mappedUser = mapUser(user);
+          const isAdminUser = mappedUser?.role === "admin" || user?.role === "admin";
 
-          setAccessToken(token);
+          persistToken(token);
 
           set({
-            user: mapUser(userData),
+            user: mappedUser,
             token,
             isAuthenticated: true,
             isAdminAuthenticated: isAdminUser,
             isInitialized: true,
+            error: null,
           });
 
           return true;
         } catch (err) {
           const msg =
             err?.response?.data?.message ||
+            err?.message ||
             "Login failed";
+
           set({ error: msg });
           toast.error(msg);
           return false;
@@ -81,73 +127,100 @@ export const useAuthStore = create(
 
       /* ---------------- SESSION ---------------- */
       setSession: (res) => {
-        // Handle various response wrappers (Axios, Fetch, or direct data)
-        const root = res?.data || res;
-        const payload = root?.data || root;
+        const { user, token } = normalizeSession(res);
 
-        const userData = payload?.user || payload;
-        const token = payload?.accessToken || payload?.token;
-
-        console.log(">>> [AUTH_STORE] Setting Session:", { 
-          hasUser: !!userData, 
-          hasToken: !!token,
-          email: userData?.email 
-        });
-
-        if (!userData || !token || typeof token !== "string") {
-          console.error(">>> [AUTH_STORE] Failed to set session: Missing data", { payload });
+        if (!user || !token || typeof token !== "string") {
           return false;
         }
 
-        const isAdmin = userData.role === "admin";
+        const mappedUser = mapUser(user);
+        const isAdmin = mappedUser?.role === "admin" || user?.role === "admin";
 
-        setAccessToken(token);
+        persistToken(token);
 
         set({
-          user: mapUser(userData),
+          user: mappedUser,
           token,
           isAuthenticated: true,
           isAdminAuthenticated: isAdmin,
           isInitialized: true,
+          error: null,
         });
 
         return true;
       },
 
-      /* ---------------- FETCH USER (PERSISTENCE) ---------------- */
+      /* ---------------- FETCH USER ---------------- */
       fetchUser: async () => {
-        set({ loading: true });
-        
-        try {
-          // We always try /me because withCredentials: true sends the token cookie automatically
-          const res = await api.get("/auth/me");
-          
-          const root = res?.data || res;
-          const userData = root?.user || root?.data?.user || root?.data;
+        const token = getToken();
 
-          if (userData && userData.id) {
-            set({
-              user: mapUser(userData),
-              isAuthenticated: true,
-              isAdminAuthenticated: userData.role === "admin",
-              isInitialized: true,
-            });
-          } else {
-             set({ isAuthenticated: false, isInitialized: true });
+        if (!token) {
+          clearAuth();
+          set({
+            user: null,
+            token: null,
+            isAuthenticated: false,
+            isAdminAuthenticated: false,
+            isInitialized: true,
+            isFetchingUser: false,
+          });
+          return false;
+        }
+
+        persistToken(token);
+        set({ loading: true, isFetchingUser: true, error: null });
+
+        try {
+          const res = await apiCall(() => api.get("/auth/me"));
+
+          if (!res?.success) {
+            throw new Error(res?.message || "No user data");
           }
-        } catch (err) {
-          console.error("Auth restore failed", err);
-          clearAuth(); // Clears local storage
-          set({ user: null, isAuthenticated: false, isInitialized: true });
+
+          const payload = getPayload(res);
+          const userData = payload?.user || payload;
+
+          if (!userData) throw new Error("No user data");
+
+          const mappedUser = mapUser(userData);
+
+          set({
+            user: mappedUser,
+            token,
+            isAuthenticated: true,
+            isAdminAuthenticated: mappedUser?.role === "admin",
+            isInitialized: true,
+            error: null,
+          });
+
+          return true;
+        } catch {
+          clearAuth();
+          localStorage.removeItem("token");
+          localStorage.removeItem("accessToken");
+
+          set({
+            user: null,
+            token: null,
+            isAuthenticated: false,
+            isAdminAuthenticated: false,
+            isInitialized: true,
+          });
+
+          return false;
         } finally {
-          set({ loading: false });
+          set({ loading: false, isFetchingUser: false });
         }
       },
 
       /* ---------------- LOGOUT ---------------- */
-      logout: () => {
+      logout: async () => {
         api.post(ENDPOINTS.AUTH.LOGOUT).catch(() => { });
+
         clearAuth();
+        localStorage.removeItem("auth-storage");
+        localStorage.removeItem("token");
+        localStorage.removeItem("accessToken");
 
         set({
           user: null,
@@ -155,47 +228,40 @@ export const useAuthStore = create(
           isAuthenticated: false,
           isAdminAuthenticated: false,
           isInitialized: true,
+          isAuthModalOpen: false,
+          addresses: [],
+          error: null,
         });
-
-        // Use setTimeout to ensure state is flushed before clearing storage
-        setTimeout(() => {
-          localStorage.removeItem("auth-storage");
-          localStorage.removeItem("token");
-          localStorage.removeItem("accessToken");
-        }, 100);
       },
 
       /* ---------------- ADDRESSES ---------------- */
       fetchAddresses: async () => {
         try {
-          const res = await api.get(
-            ENDPOINTS.AUTH.ADDRESSES
-          );
-          set({
-            addresses: Array.isArray(res?.data)
-              ? res.data
-              : [],
-          });
-        } catch {
-          toast.error("Failed to load addresses");
+          const res = await safeApi.get(ENDPOINTS.AUTH.ADDRESSES);
+
+          if (res?.success === false) {
+            throw new Error(res?.message || "Failed to load addresses");
+          }
+
+          set({ addresses: getList(res, "addresses") });
+        } catch (err) {
+          toast.error(err?.message || "Failed to load addresses");
         }
       },
 
       addAddress: async (data) => {
         try {
-          const res = await api.post(
-            ENDPOINTS.AUTH.ADDRESSES,
-            data
-          );
+          const res = await safeApi.post(ENDPOINTS.AUTH.ADDRESSES, data);
 
-          const newAddress =
-            res?.data || res;
+          if (res?.success === false) {
+            throw new Error(res?.message || "Failed to add address");
+          }
 
-          set((s) => ({
-            addresses: [
-              newAddress,
-              ...(s.addresses || []),
-            ],
+          const payload = getPayload(res);
+          const newAddress = payload?.address || payload;
+
+          set((state) => ({
+            addresses: [newAddress, ...(state.addresses || [])].filter(Boolean),
           }));
 
           toast.success("Address added");
@@ -203,6 +269,7 @@ export const useAuthStore = create(
         } catch (err) {
           toast.error(
             err?.response?.data?.message ||
+            err?.message ||
             "Failed to add address"
           );
           throw err;
@@ -210,21 +277,30 @@ export const useAuthStore = create(
       },
 
       deleteAddress: async (id) => {
-        try {
-          await api.delete(
-            `${ENDPOINTS.AUTH.ADDRESSES}/${id}`
-          );
+        if (!id) return false;
 
-          set((s) => ({
-            addresses: s.addresses.filter(
-              (a) =>
-                (a.id || a._id) !== id
+        try {
+          const res = await safeApi.delete(`${ENDPOINTS.AUTH.ADDRESSES}/${id}`);
+
+          if (res?.success === false) {
+            throw new Error(res?.message || "Failed to remove address");
+          }
+
+          set((state) => ({
+            addresses: (state.addresses || []).filter(
+              (address) => String(address.id || address._id) !== String(id)
             ),
           }));
 
           toast.success("Address removed");
-        } catch {
-          toast.error("Failed to remove address");
+          return true;
+        } catch (err) {
+          toast.error(
+            err?.response?.data?.message ||
+            err?.message ||
+            "Failed to remove address"
+          );
+          return false;
         }
       },
     }),
@@ -234,13 +310,15 @@ export const useAuthStore = create(
         user: state.user,
         token: state.token,
         isAuthenticated: state.isAuthenticated,
-        isAdminAuthenticated:
-          state.isAdminAuthenticated,
+        isAdminAuthenticated: state.isAdminAuthenticated,
       }),
       onRehydrateStorage: () => (state) => {
         if (state?.token) {
+          persistToken(state.token);
           state.isAuthenticated = true;
+          state.isAdminAuthenticated = state.user?.role === "admin";
         }
+        if (state) state.isInitialized = true;
       },
     }
   )
@@ -254,48 +332,68 @@ export const useCartStore = create((set, get) => ({
   isLoading: false,
 
   fetchCart: async () => {
-    const token =
-      localStorage.getItem("accessToken") ||
-      localStorage.getItem("token");
-
-    if (!token) return;
+    if (!getToken()) {
+      set({ cart: [], isLoading: false });
+      return [];
+    }
 
     set({ isLoading: true });
 
     try {
-      const res = await api.get(ENDPOINTS.CARTS);
-      const list =
-        res?.items ||
-        res?.data ||
-        (Array.isArray(res) ? res : []);
+      const res = await apiCall(() => api.get(ENDPOINTS.CART.BASE));
 
-      set({
-        cart: (list || []).map(mapCartItem),
-      });
-    } catch {
-      toast.error("Failed to load cart");
+      if (!res?.success) {
+        throw new Error(res?.message || "Failed to load cart");
+      }
+
+      const list = getList(res, "items");
+
+      const mapped = list.map(mapCartItem).filter(Boolean);
+      set({ cart: mapped });
+
+      return mapped;
+    } catch (err) {
+      toast.error(err?.message || "Failed to load cart");
+      return [];
     } finally {
       set({ isLoading: false });
     }
   },
 
   addToCart: async (...args) => {
+    const productId = args[0];
+
+    if (!productId) {
+      toast.error("Invalid product");
+      throw new Error("Invalid product");
+    }
+
     try {
-      await api.post(ENDPOINTS.CARTS, {
-        productId: args[0],
-        quantity: args[1],
-        size: args[2],
-        topSize: args[3],
-        bottomSize: args[4],
-        color: args[5],
-        variantIdx: args[6],
-      });
+      const quantity = Math.max(1, Number(args[1]) || 1);
+
+      const body = {
+        productId: String(productId),
+        quantity,
+        size: args[2] || "",
+        topSize: args[3] || "",
+        bottomSize: args[4] || "",
+        color: args[5] || "",
+      };
+
+      if (args[6] !== undefined) body.variantIdx = args[6];
+
+      const res = await apiCall(() => api.post(ENDPOINTS.CART.ADD, body));
+
+      if (!res?.success) {
+        throw new Error(res?.message || "Failed to add item");
+      }
 
       await get().fetchCart();
-      toast.success("Added to cart");
+      return true;
     } catch (err) {
       toast.error(
         err?.response?.data?.message ||
+        err?.message ||
         "Failed to add item"
       );
       throw err;
@@ -306,57 +404,93 @@ export const useCartStore = create((set, get) => ({
     productId,
     size,
     quantity,
-    color = null
+    color = null,
+    topSize = null,
+    bottomSize = null,
+    variantIdx = null
   ) => {
-    try {
-      if (quantity <= 0)
-        return get().removeFromCart(
-          productId,
-          size,
-          color
-        );
+    if (!productId) return false;
 
-      await api.put(ENDPOINTS.CARTS, {
-        productId,
-        size,
-        quantity,
-        color,
-      });
+    const nextQty = Number(quantity) || 0;
+
+    try {
+      if (nextQty <= 0) {
+        return get().removeFromCart(productId, size, color);
+      }
+
+      const res = await apiCall(() =>
+        api.put(ENDPOINTS.CART.BASE, {
+          productId,
+          size: size || "",
+          topSize: topSize || "",
+          bottomSize: bottomSize || "",
+          quantity: nextQty,
+          color: color || "",
+          ...(variantIdx !== null && variantIdx !== undefined ? { variantIdx } : {}),
+        })
+      );
+
+      if (!res?.success) {
+        throw new Error(res?.message || "Failed to update cart");
+      }
 
       await get().fetchCart();
-    } catch {
-      toast.error("Failed to update cart");
+      return true;
+    } catch (err) {
+      toast.error(
+        err?.response?.data?.message ||
+        err?.message ||
+        "Failed to update cart"
+      );
+      return false;
     }
   },
 
   removeFromCart: async (
     productId,
     size = null,
-    color = null
+    color = null,
+    topSize = null,
+    bottomSize = null,
+    variantIdx = null
   ) => {
-    try {
-      const q = new URLSearchParams();
-      if (size) q.append("size", size);
-      if (color) q.append("color", color);
+    if (!productId) return false;
 
-      await api.delete(
-        `${ENDPOINTS.CARTS}/${productId}${q.toString() ? `?${q}` : ""
-        }`
-      );
+    try {
+      const query = new URLSearchParams();
+      if (size) query.append("size", size);
+      if (color) query.append("color", color);
+      if (topSize) query.append("topSize", topSize);
+      if (bottomSize) query.append("bottomSize", bottomSize);
+      if (variantIdx !== null && variantIdx !== undefined) query.append("variantIdx", variantIdx);
+
+      const url = `${ENDPOINTS.CART.BASE}/${productId}${query.toString() ? `?${query.toString()}` : ""
+        }`;
+
+      const res = await apiCall(() => api.delete(url));
+
+      if (!res?.success) {
+        throw new Error(res?.message || "Failed to remove item");
+      }
 
       await get().fetchCart();
-      toast.success("Item removed");
-    } catch {
-      toast.error("Failed to remove item");
+      return true;
+    } catch (err) {
+      toast.error(
+        err?.response?.data?.message ||
+        err?.message ||
+        "Failed to remove item"
+      );
+      return false;
     }
   },
 
   clearCart: () => set({ cart: [] }),
 
   get totalPrice() {
-    return get().cart.reduce(
-      (acc, i) =>
-        acc + (i.price || 0) * (i.quantity || 1),
+    return (get().cart || []).reduce(
+      (acc, item) =>
+        acc + (Number(item.price) || 0) * (Number(item.quantity) || 1),
       0
     );
   },
@@ -370,75 +504,97 @@ export const useWishlistStore = create((set, get) => ({
   isLoading: false,
 
   fetchWishlist: async () => {
-    const token =
-      localStorage.getItem("accessToken") ||
-      localStorage.getItem("token");
-
-    if (!token) return;
+    if (!getToken()) {
+      set({ items: [], isLoading: false });
+      return [];
+    }
 
     set({ isLoading: true });
 
     try {
-      const res = await api.get(
-        ENDPOINTS.WISHLISTS
-      );
+      const res = await safeApi.get(ENDPOINTS.WISHLIST.BASE);
 
-      const list =
-        res?.data ||
-        (Array.isArray(res) ? res : []);
+      if (res?.success === false) {
+        throw new Error(res?.message || "Failed to load wishlist");
+      }
 
-      set({
-        items: (list || []).map(mapProduct),
-      });
-    } catch {
-      toast.error("Failed to load wishlist");
+      const mapped = getList(res, "items").map(mapProduct).filter(Boolean);
+      set({ items: mapped });
+
+      return mapped;
+    } catch (err) {
+      toast.error(err?.message || "Failed to load wishlist");
+      return [];
     } finally {
       set({ isLoading: false });
     }
   },
 
   toggleWishlist: async (productId) => {
+    if (!productId) {
+      toast.error("Invalid product");
+      return false;
+    }
+
+    const id = String(productId);
     const { items } = get();
+
     const exists = items.some(
-      (p) => p.id === productId
+      (product) => String(product.id || product._id) === id
     );
 
     try {
       if (exists) {
-        await api.delete(
-          `${ENDPOINTS.WISHLISTS}/${productId}`
-        );
+        const res = await safeApi.delete(`${ENDPOINTS.WISHLIST.BASE}/${id}`);
+
+        if (res?.success === false) {
+          throw new Error(res?.message || "Failed to update wishlist");
+        }
 
         set({
           items: items.filter(
-            (p) => p.id !== productId
+            (product) => String(product.id || product._id) !== id
           ),
         });
 
-        toast.success("Removed from wishlist");
-      } else {
-        const res = await api.post(
-          ENDPOINTS.WISHLISTS,
-          { productId }
-        );
-
-        const newItem =
-          res?.data || res;
-
-        set({
-          items: [
-            mapProduct(newItem),
-            ...items,
-          ],
-        });
-
-        toast.success("Added to wishlist");
+        return false;
       }
-    } catch {
-      toast.error("Failed to update wishlist");
+
+      const res = await safeApi.post(ENDPOINTS.WISHLIST.BASE, {
+        productId: id,
+      });
+
+      if (res?.success === false) {
+        throw new Error(res?.message || "Failed to update wishlist");
+      }
+
+      const payload = getPayload(res);
+      const rawProduct = payload?.product || payload?.item || payload;
+      const mappedProduct = mapProduct(rawProduct);
+
+      if (mappedProduct) {
+        set({ items: [mappedProduct, ...items] });
+      } else {
+        await get().fetchWishlist();
+      }
+
+      return true;
+    } catch (err) {
+      toast.error(
+        err?.response?.data?.message ||
+        err?.message ||
+        "Failed to update wishlist"
+      );
+      return exists;
     }
   },
 
-  isInWishlist: (id) =>
-    get().items.some((p) => p.id === id),
+  isInWishlist: (id) => {
+    if (!id) return false;
+    return (get().items || []).some(
+      (product) => String(product.id || product._id) === String(id)
+    );
+  },
+
+  clearWishlist: () => set({ items: [] }),
 }));

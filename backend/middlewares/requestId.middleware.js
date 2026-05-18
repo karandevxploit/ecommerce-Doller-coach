@@ -1,4 +1,4 @@
-const { v4: uuidv4, validate: uuidValidate } = require("uuid");
+const crypto = require("crypto");
 const { AsyncLocalStorage } = require("async_hooks");
 
 /**
@@ -17,11 +17,14 @@ const asyncLocalStorage = new AsyncLocalStorage();
 
 // Configurable limits
 const MAX_ID_LENGTH = 64;
+const SAFE_ID_PATTERN = /^[a-zA-Z0-9\-._:]+$/;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // Safe ID generator
 const generateSafeId = () => {
   try {
-    return uuidv4();
+    return crypto.randomUUID();
   } catch (err) {
     // Absolute fallback (extremely rare)
     return `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -30,10 +33,11 @@ const generateSafeId = () => {
 
 // Sanitize incoming ID
 const sanitizeIncomingId = (id) => {
-  if (!id || typeof id !== "string") return null;
+  const rawId = Array.isArray(id) ? id[0] : id;
+  if (!rawId || typeof rawId !== "string") return null;
 
-  // Trim and basic cleanup
-  const cleanId = id.trim();
+  // Some proxies can join duplicate headers with commas.
+  const cleanId = rawId.split(",")[0].trim();
 
   // Length check
   if (cleanId.length === 0 || cleanId.length > MAX_ID_LENGTH) {
@@ -41,17 +45,33 @@ const sanitizeIncomingId = (id) => {
   }
 
   // Allow only safe characters (prevent log injection)
-  const safePattern = /^[a-zA-Z0-9\-._:]+$/;
-  if (!safePattern.test(cleanId)) {
+  if (!SAFE_ID_PATTERN.test(cleanId)) {
     return null;
   }
 
   // Prefer valid UUIDs, but allow safe custom IDs
-  if (uuidValidate(cleanId)) {
+  if (UUID_PATTERN.test(cleanId)) {
     return cleanId;
   }
 
   return cleanId;
+};
+
+const attachRequestId = (req, res, requestId) => {
+  if (req) {
+    req.id = requestId;
+    req.requestId = requestId;
+    req.correlationId = requestId;
+  }
+
+  if (res?.locals) {
+    res.locals.requestId = requestId;
+  }
+
+  if (typeof res?.setHeader === "function") {
+    res.setHeader("X-Request-ID", requestId);
+    res.setHeader("X-Correlation-ID", requestId);
+  }
 };
 
 const requestIdMiddleware = (req, res, next) => {
@@ -65,22 +85,17 @@ const requestIdMiddleware = (req, res, next) => {
     const requestId =
       sanitizeIncomingId(incomingId) || generateSafeId();
 
-    // Attach to request
-    req.id = requestId;
-
-    // Attach to response
-    res.setHeader("X-Request-ID", requestId);
+    attachRequestId(req, res, requestId);
 
     // Async context propagation
-    asyncLocalStorage.run({ requestId }, () => {
+    asyncLocalStorage.run({ requestId, correlationId: requestId }, () => {
       next();
     });
   } catch (err) {
     // Absolute fail-safe (middleware must never crash)
     const fallbackId = generateSafeId();
 
-    req.id = fallbackId;
-    res.setHeader("X-Request-ID", fallbackId);
+    attachRequestId(req, res, fallbackId);
 
     next();
   }
@@ -89,12 +104,20 @@ const requestIdMiddleware = (req, res, next) => {
 /**
  * Helper to access requestId anywhere (logs, services, DB layer)
  */
-const getRequestId = () => {
+const getRequestId = (req) => {
+  if (req?.requestId || req?.id) {
+    return req.requestId || req.id;
+  }
+
   const store = asyncLocalStorage.getStore();
   return store ? store.requestId : null;
 };
 
 module.exports = {
   requestIdMiddleware,
+  requestTracker: requestIdMiddleware,
   getRequestId,
+  asyncLocalStorage,
+  generateSafeId,
+  sanitizeIncomingId,
 };

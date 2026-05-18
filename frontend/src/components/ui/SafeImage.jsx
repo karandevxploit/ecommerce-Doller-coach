@@ -1,13 +1,7 @@
-import { useState, useEffect } from "react";
-import { Image as ImageIcon } from "lucide-react";
-import { resolveImageUrl } from "../../utils/url";
+import { useState, useEffect, useMemo } from "react";
+import { FALLBACK_IMAGE_URL, resolveImageUrl } from "../../utils/url";
 
-/**
- * SafeImage Component (PRODUCTION-READY)
- * Guaranteed to never show a broken image.
- */
-
-const FALLBACK_IMAGE = "/placeholder.png";
+const FALLBACK_IMAGE = FALLBACK_IMAGE_URL;
 
 export default function SafeImage({
   src,
@@ -17,35 +11,25 @@ export default function SafeImage({
   priority = false,
   ...props
 }) {
-  const [imageSrc, setImageSrc] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const resolvedSrc = useMemo(() => {
+    return resolveImageUrl(src) || FALLBACK_IMAGE;
+  }, [src]);
+
+  const [imageSrc, setImageSrc] = useState(resolvedSrc);
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    if (!src) {
-      setImageSrc(FALLBACK_IMAGE);
-      setLoading(false);
-      return;
-    }
-
-    // Cache busting + resolution
-    const resolved = resolveImageUrl(src);
-    const cacheBuster = resolved.includes("?") ? `&t=${Date.now()}` : `?t=${Date.now()}`;
-    
-    setImageSrc(`${resolved}${cacheBuster}`);
-    setLoading(true);
+    setImageSrc(resolvedSrc);
     setError(false);
-  }, [src]);
-
-  const handleLoad = () => setLoading(false);
+  }, [resolvedSrc]);
 
   const handleError = () => {
     if (imageSrc !== FALLBACK_IMAGE) {
       setImageSrc(FALLBACK_IMAGE);
-    } else {
-      setError(true);
-      setLoading(false);
+      return;
     }
+
+    setError(true);
   };
 
   return (
@@ -54,25 +38,20 @@ export default function SafeImage({
       role="img"
       aria-label={alt}
     >
-      {/* SKELETON / LOADER */}
-      {loading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-slate-100 animate-pulse z-10">
-          <ImageIcon size={24} className="text-slate-300" />
-        </div>
+      {error ? (
+        <div className="absolute inset-0 bg-slate-100" />
+      ) : (
+        <img
+          src={imageSrc || FALLBACK_IMAGE}
+          alt={alt}
+          loading={priority ? "eager" : "lazy"}
+          fetchPriority={priority ? "high" : "auto"}
+          decoding={priority ? "sync" : "async"}
+          onError={handleError}
+          className={`w-full h-full object-cover opacity-100 ${className}`}
+          {...props}
+        />
       )}
-
-      {/* ACTUAL IMAGE */}
-      <img
-        src={imageSrc || FALLBACK_IMAGE}
-        alt={alt}
-        loading={priority ? "eager" : "lazy"}
-        onLoad={handleLoad}
-        onError={handleError}
-        className={`w-full h-full object-cover transition-opacity duration-500 ${
-          loading ? "opacity-0" : "opacity-100"
-        } ${className}`}
-        {...props}
-      />
     </div>
   );
 }

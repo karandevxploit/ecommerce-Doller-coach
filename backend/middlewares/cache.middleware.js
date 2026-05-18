@@ -1,162 +1,209 @@
-const { redis } = require("../config/redis");
-const { logger } = require("../utils/logger");
-const env = require("../config/env");
 const crypto = require("crypto");
 const zlib = require("zlib");
 
-// ===============================
-// CONFIG
-// ===============================
-const DEFAULT_TTL = 300;
-const MAX_PAYLOAD_SIZE = 200 * 1024; // 200KB
+const redis = require("../config/redis");
+const { logger } = require("../utils/logger");
+const env = require("../config/env");
 
-// ===============================
-// HELPERS
-// ===============================
+const DEFAULT_TTL = Number(process.env.ROUTE_CACHE_TTL_SECONDS || 60);
+const MAX_PAYLOAD_SIZE = Number(process.env.ROUTE_CACHE_MAX_BYTES || 200 * 1024);
+const CACHE_TIMEOUT_MS = Number(process.env.ROUTE_CACHE_TIMEOUT_MS || 500);
 
-// Stable hash key (prevents long keys)
-const buildKey = (req) => {
-  const canonicalQuery = Object.keys(req.query || {})
+const shouldBypass = (req) =>
+  env.NODE_ENV === "test" ||
+  req.method !== "GET" ||
+  req.headers["cache-control"] === "no-cache" ||
+  req.query?.nocache === "1" ||
+  !redis.isReady?.();
+
+const stableQuery = (query = {}) =>
+  Object.keys(query)
+    .filter((key) => !["_", "t", "timestamp", "nocache"].includes(key))
     .sort()
-    .reduce((acc, k) => {
-      acc[k] = req.query[k];
+    .reduce((acc, key) => {
+      acc[key] = query[key];
       return acc;
     }, {});
 
-  const raw = `${req.method}:${req.baseUrl}${req.path}:${JSON.stringify(canonicalQuery)}`;
+const buildRouteKey = (req) => {
+  const routePath = `${req.baseUrl || ""}${req.path || ""}`.replace(/\/+/g, "/") || req.originalUrl;
+  const routeKey = `${req.method}:${routePath}`;
+  const raw = `${routeKey}:${JSON.stringify(stableQuery(req.query || {}))}`;
+  const hash = crypto.createHash("sha1").update(raw).digest("hex");
 
-  return "cache:" + crypto.createHash("sha1").update(raw).digest("hex");
+  return `cache:${routeKey}:${hash}`;
 };
 
-// Compress payload
-const compress = (data) => {
+const withTimeout = (promise, fallback = null) => {
+  let timer;
+
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(fallback), CACHE_TIMEOUT_MS);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+};
+
+const encodePayload = (payload) => {
   try {
-    return zlib.gzipSync(JSON.stringify(data)).toString("base64");
+    const json = JSON.stringify(payload);
+    if (Buffer.byteLength(json, "utf8") > MAX_PAYLOAD_SIZE) return null;
+
+    const compressed = zlib.gzipSync(json).toString("base64");
+    return JSON.stringify({ encoding: "gzip-base64-json", payload: compressed });
   } catch {
     return null;
   }
 };
 
-// Decompress payload
-const decompress = (data) => {
+const decodePayload = (value) => {
+  if (!value) return null;
+
   try {
-    const buffer = Buffer.from(data, "base64");
-    return JSON.parse(zlib.gunzipSync(buffer).toString());
+    const parsed = JSON.parse(value);
+
+    if (parsed?.encoding === "gzip-base64-json") {
+      const json = zlib.gunzipSync(Buffer.from(parsed.payload, "base64")).toString();
+      return JSON.parse(json);
+    }
+
+    return parsed;
   } catch {
-    return null;
+    try {
+      const json = zlib.gunzipSync(Buffer.from(value, "base64")).toString();
+      return JSON.parse(json);
+    } catch {
+      return null;
+    }
   }
 };
+
+const normalizePattern = (pattern = "") => {
+  const raw = String(pattern || "").trim();
+  if (!raw || raw === "*") return "*";
+
+  const withoutCache = raw.replace(/^cache:\*/, "");
+  const normalized = withoutCache.startsWith("/api/")
+    ? withoutCache
+    : withoutCache.startsWith("/")
+      ? withoutCache
+      : `/api/${withoutCache}`;
+
+  return normalized.replace(/\/+/g, "/");
+};
+
+const patternToMatches = (pattern) => {
+  const normalized = normalizePattern(pattern);
+  if (normalized === "*") return ["cache:*"];
+
+  return [
+    `cache:*${normalized}*`,
+    `cache:*${normalized.replace(/^\/api\//, "/")}*`,
+    `cache:*${normalized.split("/").filter(Boolean).pop()}*`,
+  ];
+};
+
+exports.buildKey = buildRouteKey;
 
 // ===============================
 // CACHE MIDDLEWARE
 // ===============================
 exports.cacheRoute = (ttl = DEFAULT_TTL) => async (req, res, next) => {
-  if (
-    env.NODE_ENV === "test" ||
-    req.method !== "GET" ||
-    !redis ||
-    redis.status !== "ready"
-  ) {
-    return next();
-  }
+  if (shouldBypass(req)) return next();
 
-  const key = buildKey(req);
+  const key = buildRouteKey(req);
 
   try {
-    const cached = await Promise.race([
-      redis.get(key),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Redis Timeout")), 1000))
-    ]);
+    const cached = decodePayload(await withTimeout(redis.get(key), null));
 
     if (cached) {
-      const data = decompress(cached);
-
-      if (data) {
-        logger.info("[CACHE_HIT]", { url: req.originalUrl });
-        return res.json(data);
-      }
+      res.setHeader("x-cache", "HIT");
+      return res.status(200).json(cached);
     }
 
-    logger.info("[CACHE_MISS]", { url: req.originalUrl });
+    res.setHeader("x-cache", "MISS");
+    const originalJson = res.json.bind(res);
 
-    const originalJson = res.json;
-
-    res.json = function (body) {
+    res.json = (body) => {
       try {
-        if (res.statusCode === 200) {
-          const payload = JSON.stringify(body);
+        const cacheable =
+          res.statusCode >= 200 &&
+          res.statusCode < 300 &&
+          body &&
+          body.success !== false;
 
-          // Avoid caching huge responses
-          if (payload.length < MAX_PAYLOAD_SIZE) {
-            const compressed = compress(body);
-
-            if (compressed) {
-              redis
-                .set(key, compressed, "EX", ttl)
-                .catch((err) =>
-                  logger.error("[CACHE_SET_FAIL]", err.message)
-                );
-            }
-          } else {
-            logger.warn("[CACHE_SKIP_LARGE_PAYLOAD]", {
-              size: payload.length,
+        if (cacheable) {
+          const encoded = encodePayload(body);
+          if (encoded) {
+            withTimeout(redis.set(key, encoded, "EX", ttl), null).catch((err) => {
+              logger.warn("[CACHE_SET_FAIL]", { key, message: err.message });
             });
           }
         }
       } catch (err) {
-        logger.error("[CACHE_WRITE_ERROR]", err.message);
+        logger.warn("[CACHE_WRITE_ERROR]", { key, message: err.message });
       }
 
-      return originalJson.call(this, body);
+      return originalJson(body);
     };
   } catch (err) {
-    logger.error("[CACHE_ERROR]", err.message);
+    logger.warn("[CACHE_ERROR]", { key, message: err.message });
   }
 
-  next();
+  return next();
 };
 
 // ===============================
-// INVALIDATION (OPTIMIZED)
+// INVALIDATION
 // ===============================
-exports.invalidateCache = async (pattern) => {
-  if (!redis || redis.status !== "ready") return;
+exports.invalidateCache = async (pattern = "*") => {
+  if (!redis.isReady?.()) return 0;
 
-  try {
+  const matches = [...new Set(patternToMatches(pattern))];
+  let total = 0;
+
+  for (const match of matches) {
     let cursor = "0";
-    let total = 0;
 
     do {
-      const [nextCursor, keys] = await redis.scan(
-        cursor,
-        "MATCH",
-        `cache:*${pattern}*`,
-        "COUNT",
-        200
-      );
+      try {
+        const result = await withTimeout(
+          redis.safeCall((r) => r.scan(cursor, "MATCH", match, "COUNT", 200)),
+          null
+        );
 
-      cursor = nextCursor;
+        if (!result) break;
 
-      if (keys.length) {
-        await redis.del(...keys);
-        total += keys.length;
+        const [nextCursor, keys = []] = result;
+        cursor = nextCursor;
+
+        if (keys.length) {
+          await withTimeout(redis.safeCall((r) => r.del(...keys)), null);
+          total += keys.length;
+        }
+      } catch (err) {
+        logger.warn("[CACHE_INVALIDATE_ERROR]", { pattern, match, message: err.message });
+        break;
       }
     } while (cursor !== "0");
-
-    logger.info("[CACHE_INVALIDATED]", { pattern, total });
-  } catch (err) {
-    logger.error("[CACHE_INVALIDATE_ERROR]", err.message);
   }
+
+  if (total > 0) {
+    logger.info("[CACHE_INVALIDATED]", { pattern, total });
+  }
+
+  return total;
 };
 
-/**
- * Middleware version of invalidation
- */
-exports.clearCache = (pattern) => async (req, res, next) => {
+exports.clearCache = (pattern) => (req, res, next) => {
   setImmediate(() => {
     exports.invalidateCache(pattern).catch((err) =>
-      logger.error("[CACHE_CLEAR_FAIL]", err.message)
+      logger.warn("[CACHE_CLEAR_FAIL]", { pattern, message: err.message })
     );
   });
-  next();
+
+  return next();
 };

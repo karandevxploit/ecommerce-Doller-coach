@@ -6,97 +6,120 @@ const { ok, fail } = require("../utils/apiResponse");
 const { safeCall } = require("../config/redis");
 const { logger } = require("../utils/logger");
 
-const CACHE_TTL = 300; // 5 min
+const CACHE_TTL = 300;
+const PROFILE_FIELDS =
+  "name email phone role avatar emailVerified phoneVerified isVerified provider addresses defaultAddressId devices lastLoginAt createdAt updatedAt";
 
-// ===============================
-// HELPER: GET USER ID SAFE
-// ===============================
-const getUserId = (req) => {
-  return req.user?.id || req.user?._id;
+const getUserId = (req) => req.user?.id || req.user?._id || req.user?.userId;
+
+const isObjectId = (value) => mongoose.Types.ObjectId.isValid(String(value || ""));
+
+const safeJsonParse = (value) => {
+  try {
+    return value ? JSON.parse(value) : null;
+  } catch {
+    return null;
+  }
+};
+
+const serializeUser = (user = {}) => ({
+  ...user,
+  id: String(user._id || user.id || ""),
+  _id: String(user._id || user.id || ""),
+  role: String(user.role || "user").toLowerCase(),
+  isVerified: Boolean(user.isVerified || user.emailVerified || user.phoneVerified),
+  devices: Array.isArray(user.devices)
+    ? user.devices.map((device) => ({
+        deviceId: device.deviceId || "",
+        lastUsed: device.lastUsed || device.updatedAt || null,
+      }))
+    : [],
+});
+
+const invalidateUserCache = async (userId) => {
+  await safeCall((r) => r.del(`user:profile:${userId}`));
 };
 
 // ===============================
-// PROFILE (CACHED)
+// PROFILE
 // ===============================
 exports.profile = asyncHandler(async (req, res) => {
   const userId = getUserId(req);
 
-  if (!mongoose.Types.ObjectId.isValid(userId)) {
+  if (!isObjectId(userId)) {
     return fail(res, "Invalid user", 400);
   }
 
   const cacheKey = `user:profile:${userId}`;
+  const cached = safeJsonParse(await safeCall((r) => r.get(cacheKey)));
 
-  // 1. CACHE CHECK
-  const cached = await safeCall((r) => r.get(cacheKey));
   if (cached) {
-    return ok(res, JSON.parse(cached), "Profile (cache)");
+    return ok(res, cached, "Profile fetched");
   }
 
-  // 2. DB FETCH
-  const user = await User.findById(userId)
-    .select("-password -refreshTokens")
+  const user = await User.findOne({ _id: userId, isDeleted: { $ne: true } })
+    .select(PROFILE_FIELDS)
+    .populate("defaultAddressId")
     .lean();
 
   if (!user) {
     return fail(res, "User not found", 404);
   }
 
-  // 3. CACHE SET (ASYNC)
-  safeCall((r) =>
-    r.set(cacheKey, JSON.stringify(user), "EX", CACHE_TTL)
-  );
+  const payload = serializeUser(user);
 
-  return ok(res, user, "Profile fetched");
+  safeCall((r) => r.set(cacheKey, JSON.stringify(payload), "EX", CACHE_TTL));
+
+  return ok(res, payload, "Profile fetched");
 });
 
 // ===============================
-// SAVE FCM TOKEN (MULTI-DEVICE SAFE)
+// SAVE FCM TOKEN
 // ===============================
 exports.saveFcmToken = asyncHandler(async (req, res) => {
-  const { token, deviceId } = req.body;
+  const { token, deviceId = "default" } = req.body || {};
   const userId = getUserId(req);
+  const safeToken = String(token || "").trim();
+  const safeDeviceId = String(deviceId || "default").trim().slice(0, 120);
 
-  // VALIDATION
-  if (!token || typeof token !== "string" || token.length < 20) {
+  if (!isObjectId(userId)) return fail(res, "Invalid user", 400);
+  if (!safeToken || safeToken.length < 20 || safeToken.length > 4096) {
     return fail(res, "Invalid FCM token", 400);
   }
+  if (!safeDeviceId) return fail(res, "Device ID required", 400);
 
-  if (!deviceId || typeof deviceId !== "string") {
-    return fail(res, "Device ID required", 400);
+  const user = await User.findOne({ _id: userId, isDeleted: { $ne: true } }).select("devices");
+  if (!user) return fail(res, "User not found", 404);
+
+  const devices = Array.isArray(user.devices) ? user.devices : [];
+  const existingIndex = devices.findIndex((device) => device.deviceId === safeDeviceId);
+  const nextDevice = {
+    fcmToken: safeToken,
+    deviceId: safeDeviceId,
+    lastUsed: new Date(),
+  };
+
+  if (existingIndex >= 0) {
+    devices[existingIndex] = nextDevice;
+  } else {
+    devices.push(nextDevice);
   }
 
-  // Store multiple device tokens safely
-  await User.updateOne(
-    { _id: userId },
+  user.devices = devices
+    .filter((device) => device?.fcmToken && device?.deviceId)
+    .slice(-5);
+
+  await user.save();
+  await invalidateUserCache(userId);
+
+  logger.info("[FCM_TOKEN_SAVED]", { userId: String(userId), deviceId: safeDeviceId });
+
+  return ok(
+    res,
     {
-      $addToSet: {
-        fcmTokens: {
-          token,
-          deviceId,
-          updatedAt: new Date(),
-        },
-      },
-    }
+      saved: true,
+      deviceCount: user.devices.length,
+    },
+    "FCM token stored"
   );
-
-  // OPTIONAL: Clean old tokens (limit 5 devices)
-  await User.updateOne(
-    { _id: userId },
-    {
-      $push: {
-        fcmTokens: {
-          $each: [],
-          $slice: -5,
-        },
-      },
-    }
-  );
-
-  // CACHE INVALIDATE
-  safeCall((r) => r.del(`user:profile:${userId}`));
-
-  logger.info("[FCM_TOKEN_SAVED]", { userId });
-
-  return ok(res, { saved: true }, "FCM token stored");
 });

@@ -1,135 +1,164 @@
-const redis = require("../config/redis");
-const { isRedisReady } = require("../config/redis");
-const { logger } = require("../utils/logger");
 const crypto = require("crypto");
 
-// ===============================
-// CONFIG
-// ===============================
-const PENDING_TTL = 120;
-const CACHE_TTL = 600;
-const MAX_BODY_SIZE = 200 * 1024; // 200KB
+const redis = require("../config/redis");
+const { logger } = require("../utils/logger");
 
-// ===============================
-// HELPER: HASH REQUEST
-// ===============================
+const PENDING_TTL = Number(process.env.IDEMPOTENCY_PENDING_TTL_SECONDS || 120);
+const CACHE_TTL = Number(process.env.IDEMPOTENCY_CACHE_TTL_SECONDS || 600);
+const MAX_BODY_SIZE = Number(process.env.IDEMPOTENCY_MAX_BODY_BYTES || 200 * 1024);
+const METHODS = new Set(["POST", "PUT", "PATCH"]);
+
+const stableStringify = (value) => {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "object") return String(value);
+  if (Buffer.isBuffer(value)) return value.toString("base64");
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+    .join(",")}}`;
+};
+
 const hashRequest = (req) => {
-  const raw = JSON.stringify({
-    body: req.body,
-    query: req.query,
-    path: req.path
+  const raw = stableStringify({
+    body: req.body || {},
+    query: req.query || {},
+    path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path,
   });
+
   return crypto.createHash("sha256").update(raw).digest("hex");
 };
 
-// ===============================
-// MIDDLEWARE
-// ===============================
+const normalizeKey = (value = "") =>
+  String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9._:-]/g, "")
+    .slice(0, 120);
+
+const getUserScope = (req) => req.user?._id || req.user?.id || req.user?.userId || "guest";
+
+const buildRedisKey = (req, keyHeader) => {
+  const route = `${req.method}:${req.baseUrl || ""}${req.path || ""}`;
+  const raw = `${getUserScope(req)}:${route}:${normalizeKey(keyHeader)}`;
+  return `idem:${crypto.createHash("sha256").update(raw).digest("hex")}`;
+};
+
+const readCache = (value) => {
+  try {
+    return value ? JSON.parse(value) : null;
+  } catch {
+    return null;
+  }
+};
+
+const sendCached = (res, cached) => {
+  res.setHeader("X-Idempotency-Cache", "HIT");
+  return res.status(cached.statusCode || 200).send(cached.body);
+};
+
 const idempotency = async (req, res, next) => {
-  if (!["POST", "PUT", "PATCH"].includes(req.method)) return next();
+  if (!METHODS.has(req.method)) return next();
 
-  const keyHeader =
-    req.headers["x-idempotency-key"] ||
-    req.headers["idempotency-key"];
+  const keyHeader = req.headers["x-idempotency-key"] || req.headers["idempotency-key"];
+  const safeKey = normalizeKey(keyHeader);
 
-  if (!keyHeader) return next();
-
-  if (!isRedisReady()) {
-    logger.warn("[IDEMPOTENCY_BYPASS] Redis not ready");
+  if (!safeKey) return next();
+  if (!redis.isReady?.()) {
+    logger.warn("[IDEMPOTENCY_BYPASS]", { reason: "redis_not_ready", path: req.originalUrl });
     return next();
   }
 
-  const userId = req.user?._id || "guest";
-
-  // 🔐 USER-SCOPED KEY (IMPORTANT FIX)
-  const redisKey = `idem:${userId}:${keyHeader}`;
-
+  const redisKey = buildRedisKey(req, safeKey);
   const requestHash = hashRequest(req);
 
   try {
-    const cached = await redis.get(redisKey);
+    const cachedRaw = await redis.get(redisKey);
+    const cached = readCache(cachedRaw);
+
+    if (cachedRaw === "pending" || cached?.state === "pending") {
+      res.setHeader("Retry-After", "2");
+      return res.status(425).json({
+        success: false,
+        data: null,
+        message: "Request already in progress",
+        code: "IN_FLIGHT",
+        errorCode: "IN_FLIGHT",
+      });
+    }
 
     if (cached) {
-      if (cached === "pending") {
-        return res.status(425).json({
-          success: false,
-          message: "Request already in progress",
-          code: "IN_FLIGHT"
-        });
-      }
-
-      const parsed = JSON.parse(cached);
-
-      // 🔐 HASH VALIDATION
-      if (parsed.hash !== requestHash) {
+      if (cached.hash !== requestHash) {
         return res.status(409).json({
           success: false,
-          message: "Idempotency key reuse with different payload",
-          code: "KEY_CONFLICT"
+          data: null,
+          message: "Idempotency key reused with a different payload",
+          code: "KEY_CONFLICT",
+          errorCode: "KEY_CONFLICT",
         });
       }
 
       logger.info("[IDEMPOTENCY_HIT]", { key: redisKey });
-
-      res.setHeader("X-Idempotency-Cache", "HIT");
-
-      return res.status(parsed.statusCode).send(parsed.body);
+      return sendCached(res, cached);
     }
 
-    // ===============================
-    // ATOMIC LOCK (SET NX)
-    // ===============================
-    const lock = await redis.set(redisKey, "pending", "NX", "EX", PENDING_TTL);
+    const lockPayload = JSON.stringify({ state: "pending", hash: requestHash });
+    const lock = await redis.safeCall((r) => r.set(redisKey, lockPayload, "EX", PENDING_TTL, "NX"));
 
     if (!lock) {
+      res.setHeader("Retry-After", "2");
       return res.status(425).json({
         success: false,
+        data: null,
         message: "Request already being processed",
-        code: "LOCKED"
+        code: "LOCKED",
+        errorCode: "LOCKED",
       });
     }
 
-    // ===============================
-    // INTERCEPT RESPONSE
-    // ===============================
-    const originalSend = res.send;
+    res.setHeader("X-Idempotency-Cache", "MISS");
 
-    res.send = function (body) {
+    const originalSend = res.send.bind(res);
+    res.send = (body) => {
       res.send = originalSend;
 
       try {
-        if (res.statusCode < 500) {
-          const bodyStr =
-            typeof body === "string"
-              ? body
-              : JSON.stringify(body);
+        const bodyString = typeof body === "string" || Buffer.isBuffer(body)
+          ? body.toString()
+          : JSON.stringify(body);
 
-          if (bodyStr.length < MAX_BODY_SIZE) {
-            const cachePayload = JSON.stringify({
-              statusCode: res.statusCode,
-              body,
-              hash: requestHash
-            });
+        if (res.statusCode < 500 && Buffer.byteLength(bodyString || "", "utf8") <= MAX_BODY_SIZE) {
+          const payload = JSON.stringify({
+            statusCode: res.statusCode,
+            headers: {
+              "content-type": res.getHeader("content-type") || "application/json; charset=utf-8",
+            },
+            body,
+            hash: requestHash,
+          });
 
-            redis.set(redisKey, cachePayload, "EX", CACHE_TTL)
-              .catch((e) => logger.error("[IDEMPOTENCY_CACHE_FAIL]", e.message));
-          }
+          redis.safeCall((r) => r.set(redisKey, payload, "EX", CACHE_TTL)).catch((err) => {
+            logger.warn("[IDEMPOTENCY_CACHE_FAIL]", { message: err.message });
+          });
         } else {
-          redis.del(redisKey).catch(() => { });
+          redis.del(redisKey).catch(() => {});
         }
       } catch (err) {
-        logger.error("[IDEMPOTENCY_WRITE_ERROR]", err.message);
+        logger.warn("[IDEMPOTENCY_WRITE_ERROR]", { message: err.message });
+        redis.del(redisKey).catch(() => {});
       }
 
-      return originalSend.call(this, body);
+      return originalSend(body);
     };
 
-    next();
-
+    return next();
   } catch (err) {
-    logger.error("[IDEMPOTENCY_ERROR]", err.message);
-    next();
+    logger.warn("[IDEMPOTENCY_ERROR]", { message: err.message });
+    return next();
   }
 };
+
+idempotency.hashRequest = hashRequest;
+idempotency.buildRedisKey = buildRedisKey;
 
 module.exports = idempotency;

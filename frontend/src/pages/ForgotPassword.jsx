@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import toast from "react-hot-toast";
@@ -6,20 +6,37 @@ import { Sparkles, ArrowRight, Mail } from "lucide-react";
 
 export default function ForgotPassword() {
   const navigate = useNavigate();
+  const mountedRef = useRef(true);
 
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const validate = () => {
-    if (!email.trim()) return "Please enter your email address.";
-    if (!/\S+@\S+\.\S+/.test(email))
+    const safeEmail = email.trim().toLowerCase();
+
+    if (!safeEmail) return "Please enter your email address.";
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeEmail)) {
       return "Please enter a valid email address.";
+    }
+
     return "";
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (loading) return;
+
     setError("");
 
     const validationError = validate();
@@ -28,26 +45,34 @@ export default function ForgotPassword() {
       return;
     }
 
+    const safeEmail = email.trim().toLowerCase();
+
     setLoading(true);
 
     try {
       await api.post("/auth/send-otp", {
-        email,
+        email: safeEmail,
+        purpose: "reset-password",
       });
 
       toast.success("OTP sent to your email");
-      navigate(
-        `/verify-reset-otp?email=${encodeURIComponent(email)}`
-      );
+
+      navigate(`/verify-reset-otp?email=${encodeURIComponent(safeEmail)}`);
     } catch (err) {
       const msg =
         err?.response?.data?.message ||
         err?.message ||
         "Failed to send OTP. Please try again.";
-      setError(msg);
+
+      if (mountedRef.current) {
+        setError(msg);
+      }
+
       toast.error(msg);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -96,12 +121,15 @@ export default function ForgotPassword() {
                 <input
                   type="email"
                   value={email}
-                  onChange={(e) =>
-                    setEmail(e.target.value.toLowerCase())
-                  }
+                  onChange={(e) => {
+                    setEmail(e.target.value.toLowerCase());
+                    if (error) setError("");
+                  }}
                   placeholder="you@example.com"
                   aria-label="Email address"
-                  className="w-full h-12 pl-10 pr-3 border rounded-lg focus:ring-2 focus:ring-black outline-none text-sm"
+                  autoComplete="email"
+                  disabled={loading}
+                  className="w-full h-12 pl-10 pr-3 border rounded-lg focus:ring-2 focus:ring-black outline-none text-sm disabled:bg-gray-50"
                 />
               </div>
             </div>

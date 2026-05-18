@@ -1,11 +1,15 @@
-const mongoose = require("mongoose");
+const { createMysqlDocumentModel } = require("../utils/mysqlDocumentModel");
 
-const schema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-  jti: { type: String, unique: true },
-  expiresAt: { type: Date }
-}, { timestamps: true });
-
-schema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-
-module.exports = mongoose.model("RefreshToken", schema);
+module.exports = createMysqlDocumentModel("RefreshToken", {
+  statics: {
+    revokeByJti(jti) {
+      return this.updateOne({ jti }, { $set: { revokedAt: new Date().toISOString() } });
+    },
+    revokeAllForUser(userId) {
+      return this.updateMany({ userId }, { $set: { revokedAt: new Date().toISOString() } });
+    },
+    findActiveByJti(jti) {
+      return this.findOne({ jti, revokedAt: { $exists: false } });
+    },
+  },
+});

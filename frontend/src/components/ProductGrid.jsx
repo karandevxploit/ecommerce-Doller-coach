@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { ProductCardSkeleton } from "./ui/Skeleton";
 import ProductCard from "./ProductCard";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
@@ -9,12 +10,31 @@ export default function ProductGrid({
   viewMode = "grid",
   loading = false,
   error = false,
-  onRetry
+  onRetry,
 }) {
   const navigate = useNavigate();
   const prefersReducedMotion = useReducedMotion();
 
   const isGrid = viewMode === "grid";
+
+  const safeProducts = useMemo(() => {
+    if (!Array.isArray(products)) return [];
+
+    return Array.from(
+      new Map(
+        products
+          .filter((product) => product && typeof product === "object")
+          .map((product) => [
+            String(product?._id || product?.id || product?.slug || product?.name || product?.title),
+            product,
+          ])
+      ).values()
+    );
+  }, [products]);
+
+  const containerClass = isGrid
+    ? "grid grid-cols-2 md:grid-cols-5 xl:grid-cols-6 gap-2.5"
+    : "flex flex-col gap-4";
 
   /* ---------------- LOADING ---------------- */
   if (loading) {
@@ -22,12 +42,15 @@ export default function ProductGrid({
       <div
         className={
           isGrid
-            ? "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
+            ? "grid grid-cols-2 md:grid-cols-5 xl:grid-cols-6 gap-2.5"
             : "space-y-4"
         }
       >
-        {Array.from({ length: 8 }).map((_, i) => (
-          <ProductCardSkeleton key={i} horizontal={!isGrid} />
+        {Array.from({ length: 8 }).map((_, index) => (
+          <ProductCardSkeleton
+            key={`product-skeleton-${index}`}
+            horizontal={!isGrid}
+          />
         ))}
       </div>
     );
@@ -53,8 +76,10 @@ export default function ProductGrid({
         </p>
 
         <button
+          type="button"
           onClick={onRetry}
-          className="mt-4 flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition"
+          disabled={!onRetry}
+          className="mt-4 flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <RefreshCcw size={14} />
           Retry
@@ -64,7 +89,7 @@ export default function ProductGrid({
   }
 
   /* ---------------- EMPTY ---------------- */
-  if (!products.length) {
+  if (!safeProducts.length) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center bg-slate-50 rounded-xl border border-slate-200">
         <h3 className="text-lg font-semibold text-slate-900">
@@ -76,6 +101,7 @@ export default function ProductGrid({
         </p>
 
         <button
+          type="button"
           onClick={() => navigate("/collection")}
           className="mt-4 px-5 py-2 bg-slate-900 text-white rounded-lg hover:bg-indigo-600 transition"
         >
@@ -87,31 +113,30 @@ export default function ProductGrid({
 
   /* ---------------- LIST ---------------- */
   return (
-    <div
-      className={
-        isGrid
-          ? "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
-          : "flex flex-col gap-4"
-      }
-    >
+    <div className={containerClass}>
       <AnimatePresence mode="popLayout">
-        {products.map((product, idx) => {
-          const key = String(product?._id || product?.id || idx);
+        {safeProducts.map((product, index) => {
+          const productId = product?._id || product?.id || product?.slug;
+          const key = productId
+            ? String(productId)
+            : `product-${index}-${product?.title || product?.name || "item"}`;
 
           return (
             <motion.div
               key={key}
               layout
-              initial={
-                prefersReducedMotion ? false : { opacity: 0, y: 10 }
-              }
+              initial={prefersReducedMotion ? false : { opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.25, delay: idx * 0.03 }}
+              exit={prefersReducedMotion ? undefined : { opacity: 0, scale: 0.95 }}
+              transition={{
+                duration: prefersReducedMotion ? 0 : 0.25,
+                delay: prefersReducedMotion ? 0 : Math.min(index * 0.03, 0.24),
+              }}
             >
               <ProductCard
                 product={product}
                 layout={isGrid ? "vertical" : "horizontal"}
+                priority={index < 4}
               />
             </motion.div>
           );

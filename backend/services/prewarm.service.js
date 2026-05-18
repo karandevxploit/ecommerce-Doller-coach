@@ -1,5 +1,6 @@
 const Product = require("../models/product.model");
 const Offer = require("../models/offer.model");
+const connectDB = require("../config/db");
 const cache = require("./cache.service");
 const { logger } = require("../utils/logger");
 
@@ -10,7 +11,10 @@ let prewarmDone = false;
  */
 const prewarmCache = async () => {
     if (prewarmDone) return;
-    prewarmDone = true;
+    if (!connectDB.isConnected()) {
+        logger.warn("[PREWARM_SKIPPED] MySQL not connected.");
+        return;
+    }
 
     try {
         const startTime = Date.now();
@@ -43,6 +47,7 @@ const prewarmCache = async () => {
         ]);
 
         logger.info(`✅ [PREWARM_DONE] Optimized in ${Date.now() - startTime}ms.`);
+        prewarmDone = true;
     } catch (err) {
         logger.warn(`⚠️ [PREWARM_BYPASSED] ${err.message}`);
     }

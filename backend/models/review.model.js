@@ -1,137 +1,26 @@
-const mongoose = require("mongoose");
-const mongoosePaginate = require("mongoose-paginate-v2");
+const { createMysqlDocumentModel } = require("../utils/mysqlDocumentModel");
 
-/**
- * ENTERPRISE REVIEW SYSTEM
- */
-
-const reviewSchema = new mongoose.Schema(
-  {
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
+module.exports = createMysqlDocumentModel("Review", {
+  statics: {
+    async toggleLike(reviewId, userId) {
+      const review = await this.findById(reviewId);
+      if (!review) return null;
+      review.likedBy = Array.isArray(review.likedBy) ? review.likedBy : [];
+      const exists = review.likedBy.some((id) => String(id) === String(userId));
+      review.likedBy = exists ? review.likedBy.filter((id) => String(id) !== String(userId)) : [...review.likedBy, userId];
+      review.likesCount = review.likedBy.length;
+      await review.save();
+      return review;
     },
-    product: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Product",
-      required: true,
-    },
-    rating: {
-      type: Number,
-      required: true,
-      min: 1,
-      max: 5,
-    },
-    comment: {
-      type: String,
-      required: true,
-      trim: true,
-      maxlength: 1000,
-    },
-    images: {
-      type: [String],
-      default: [],
-    },
-    isVerified: {
-      type: Boolean,
-      default: false,
-    },
-    likedBy: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
-    helpfulBy: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
-    likes: {
-      type: Number,
-      default: 0,
-    },
-    helpfulCount: {
-      type: Number,
-      default: 0,
-    },
-    status: {
-      type: String,
-      enum: ["pending", "approved", "rejected"],
-      default: "pending",
-    },
-    moderatedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-    moderatedAt: {
-      type: Date,
-      default: null,
-    },
-    ip: { type: String, default: null },
-    userAgent: { type: String, default: null },
-    isDeleted: {
-      type: Boolean,
-      default: false,
+    async toggleHelpful(reviewId, userId) {
+      const review = await this.findById(reviewId);
+      if (!review) return null;
+      review.helpfulBy = Array.isArray(review.helpfulBy) ? review.helpfulBy : [];
+      const exists = review.helpfulBy.some((id) => String(id) === String(userId));
+      review.helpfulBy = exists ? review.helpfulBy.filter((id) => String(id) !== String(userId)) : [...review.helpfulBy, userId];
+      review.helpfulCount = review.helpfulBy.length;
+      await review.save();
+      return review;
     },
   },
-  { timestamps: true }
-);
-
-/**
- * CONSOLIDATED INDEXES
- */
-reviewSchema.index({ user: 1, product: 1 }, { unique: true });
-reviewSchema.index({ product: 1, rating: -1, createdAt: -1 });
-reviewSchema.index({ user: 1, createdAt: -1 });
-reviewSchema.index({ rating: 1 });
-reviewSchema.index({ isVerified: 1 });
-reviewSchema.index({ status: 1 });
-reviewSchema.index({ isDeleted: 1 });
-
-/**
- * PRE-SAVE: Sync counters
- */
-reviewSchema.pre("save", function (next) {
-  try {
-    this.likes = this.likedBy.length;
-    this.helpfulCount = this.helpfulBy.length;
-    next();
-  } catch (err) {
-    next(err);
-  }
 });
-
-/**
- * STATIC METHODS
- */
-reviewSchema.statics.toggleLike = async function (reviewId, userId) {
-  const review = await this.findById(reviewId);
-  if (!review) throw new Error("Review not found");
-  const alreadyLiked = review.likedBy.some((id) => String(id) === String(userId));
-  if (alreadyLiked) {
-    return this.updateOne({ _id: reviewId }, { $pull: { likedBy: userId }, $inc: { likes: -1 } });
-  } else {
-    return this.updateOne({ _id: reviewId }, { $addToSet: { likedBy: userId }, $inc: { likes: 1 } });
-  }
-};
-
-reviewSchema.statics.toggleHelpful = async function (reviewId, userId) {
-  const review = await this.findById(reviewId);
-  if (!review) throw new Error("Review not found");
-  const already = review.helpfulBy.some((id) => String(id) === String(userId));
-  if (already) {
-    return this.updateOne({ _id: reviewId }, { $pull: { helpfulBy: userId }, $inc: { helpfulCount: -1 } });
-  } else {
-    return this.updateOne({ _id: reviewId }, { $addToSet: { helpfulBy: userId }, $inc: { helpfulCount: 1 } });
-  }
-};
-
-reviewSchema.plugin(mongoosePaginate);
-
-module.exports =
-  mongoose.models.Review ||
-  mongoose.model("Review", reviewSchema);

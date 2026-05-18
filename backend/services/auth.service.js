@@ -4,13 +4,13 @@ const env = require("../config/env");
 const RefreshToken = require("../models/refreshToken.model");
 
 class AuthService {
-  static ACCESS_EXPIRY = "7d";
+  static ACCESS_EXPIRY = process.env.JWT_ACCESS_EXPIRES_IN || "15m";
   static REFRESH_EXPIRY = "7d";
 
   // =========================
   // 🔐 ACCESS TOKEN
   // =========================
-  static generateAccessToken(user) {
+  static generateAccessToken(user, expiresIn = this.ACCESS_EXPIRY) {
     if (!user || !user._id) {
       throw new Error("Invalid user");
     }
@@ -26,7 +26,7 @@ class AuthService {
       },
       env.JWT_SECRET,
       {
-        expiresIn: this.ACCESS_EXPIRY,
+        expiresIn,
         issuer: "doller-coach-api",
         audience: "doller-coach-client"
       }
@@ -104,7 +104,7 @@ class AuthService {
         return { valid: false, reason: "INVALID_TYPE" };
       }
 
-      const exists = await RefreshToken.findOne({ jti: decoded.jti });
+      const exists = await RefreshToken.findActiveByJti(decoded.jti);
 
       if (!exists) {
         return { valid: false, reason: "TOKEN_REVOKED" };

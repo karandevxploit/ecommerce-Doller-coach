@@ -6,7 +6,6 @@ const { protect, authorize } = require("../middlewares/auth.middleware");
 const { upload, mediaUpload } = require("../middlewares/upload.middleware");
 const { cacheRoute, clearCache } = require("../middlewares/cache.middleware");
 const { authLimiter } = require("../middlewares/rateLimiter.v2");
-const { logger } = require("../utils/logger");
 
 const {
     listProducts,
@@ -39,14 +38,48 @@ const validateObjectId = (req, res, next) => {
 router.get(
     "/",
     authLimiter,
-    cacheRoute(600),
     safeHandler(listProducts)
+);
+
+router.get(
+    "/hot-sale",
+    authLimiter,
+    safeHandler(async (req, res) => {
+        const { getHotSale } = require("../controllers/product.controller");
+        await getHotSale(req, res);
+    })
+);
+
+router.get(
+    "/new-arrivals",
+    authLimiter,
+    safeHandler(async (req, res) => {
+        const { getNewArrivals } = require("../controllers/product.controller");
+        await getNewArrivals(req, res);
+    })
+);
+
+router.get(
+    "/trending",
+    authLimiter,
+    safeHandler(async (req, res) => {
+        const { getTrending } = require("../controllers/product.controller");
+        await getTrending(req, res);
+    })
+);
+
+router.get(
+    "/best-sellers",
+    authLimiter,
+    safeHandler(async (req, res) => {
+        const { getBestSellers } = require("../controllers/product.controller");
+        await getBestSellers(req, res);
+    })
 );
 
 router.get(
     "/filters",
     authLimiter,
-    cacheRoute(3600),
     safeHandler(getFilters)
 );
 
@@ -54,7 +87,6 @@ router.get(
     "/:id",
     authLimiter,
     validateObjectId,
-    cacheRoute(300),
     safeHandler(getProduct)
 );
 
@@ -66,30 +98,8 @@ router.post(
     protect,
     authorize("admin"),
     authLimiter,
-    mediaUpload.fields([
-      { name: 'image', maxCount: 1 },
-      { name: 'video', maxCount: 1 }
-    ]),
     clearCache("products"),
-    safeHandler(async (req, res, next) => {
-        try {
-            const result = await createProduct(req, res);
-
-            logger.info("PRODUCT_CREATED", {
-                adminId: req.user?.id,
-            });
-
-            if (!res.headersSent) {
-                res.json({ success: true, data: result });
-            }
-        } catch (err) {
-            logger.error("PRODUCT_CREATE_FAILED", {
-                adminId: req.user?.id,
-                error: err.message,
-            });
-            next(err);
-        }
-    })
+    safeHandler(createProduct)
 );
 
 router.put(
@@ -98,32 +108,8 @@ router.put(
     authorize("admin"),
     authLimiter,
     validateObjectId,
-    mediaUpload.fields([
-      { name: 'image', maxCount: 1 },
-      { name: 'video', maxCount: 1 }
-    ]),
     clearCache("products"),
-    safeHandler(async (req, res, next) => {
-        try {
-            const result = await updateProduct(req, res);
-
-            logger.info("PRODUCT_UPDATED", {
-                adminId: req.user?.id,
-                productId: req.params.id,
-            });
-
-            if (!res.headersSent) {
-                res.json({ success: true, data: result });
-            }
-        } catch (err) {
-            logger.error("PRODUCT_UPDATE_FAILED", {
-                adminId: req.user?.id,
-                productId: req.params.id,
-                error: err.message,
-            });
-            next(err);
-        }
-    })
+    safeHandler(updateProduct)
 );
 
 router.delete(
@@ -133,13 +119,9 @@ router.delete(
     authLimiter,
     validateObjectId,
     clearCache("products"),
-    safeHandler(async (req, res, next) => {
-        try {
-            const { deleteVideo } = require("../controllers/product.controller");
-            await deleteVideo(req, res);
-        } catch (err) {
-            next(err);
-        }
+    safeHandler(async (req, res) => {
+        const { deleteVideo } = require("../controllers/product.controller");
+        await deleteVideo(req, res);
     })
 );
 
@@ -150,27 +132,7 @@ router.delete(
     authLimiter,
     validateObjectId,
     clearCache("products"),
-    safeHandler(async (req, res, next) => {
-        try {
-            const result = await deleteProduct(req, res);
-
-            logger.info("PRODUCT_DELETED", {
-                adminId: req.user?.id,
-                productId: req.params.id,
-            });
-
-            if (!res.headersSent) {
-                res.json({ success: true, data: result });
-            }
-        } catch (err) {
-            logger.error("PRODUCT_DELETE_FAILED", {
-                adminId: req.user?.id,
-                productId: req.params.id,
-                error: err.message,
-            });
-            next(err);
-        }
-    })
+    safeHandler(deleteProduct)
 );
 
 module.exports = router;

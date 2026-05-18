@@ -12,55 +12,95 @@ export default function SEO({
   type = "website",
   price,
   currency = "INR",
-  availability = "InStock"
+  availability = "InStock",
 }) {
   const siteTitle = "Doller Coach";
   const defaultDescription =
     "Premium clothing designed for everyday comfort and style.";
-
-  const fullTitle = title
-    ? `${title} | ${siteTitle}`
-    : `${siteTitle} | Premium Clothing`;
-
-  const metaDescription = description || defaultDescription;
+  const defaultSiteUrl = "https://dollercoach.com";
+  const fallbackImage = `${defaultSiteUrl}/og-default.jpg`;
 
   const siteUrl =
-    typeof window !== "undefined"
+    typeof window !== "undefined" && window.location?.origin
       ? window.location.origin
-      : "https://dollercoach.com";
+      : defaultSiteUrl;
 
-  const fullUrl = url ? `${siteUrl}${url}` : siteUrl;
+  const currentPath =
+    typeof window !== "undefined" && window.location?.pathname
+      ? `${window.location.pathname}${window.location.search || ""}`
+      : "";
 
-  const fallbackImage = "https://dollercoach.com/og-default.jpg";
-  const metaImage = image || fallbackImage;
+  const normalizeUrl = (value, fallback = siteUrl) => {
+    if (!value) return fallback;
 
-  /* ---------------- STRUCTURED DATA ---------------- */
+    try {
+      return new URL(value, siteUrl).toString();
+    } catch {
+      return fallback;
+    }
+  };
+
+  const cleanText = (value, fallback = "") => {
+    if (value === null || value === undefined) return fallback;
+
+    return String(value)
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  const truncate = (value, maxLength) => {
+    const text = cleanText(value);
+
+    if (text.length <= maxLength) return text;
+
+    return `${text.slice(0, maxLength - 1).trim()}…`;
+  };
+
+  const safeTitle = truncate(title || "", 70);
+  const fullTitle = safeTitle
+    ? `${safeTitle} | ${siteTitle}`
+    : `${siteTitle} | Premium Clothing`;
+
+  const metaDescription =
+    truncate(description || defaultDescription, 160) || defaultDescription;
+
+  const fullUrl = normalizeUrl(url || currentPath || siteUrl);
+  const metaImage = normalizeUrl(image || fallbackImage, fallbackImage);
+
+  const numericPrice = Number(price);
+  const hasValidPrice = Number.isFinite(numericPrice) && numericPrice > 0;
+
+  const safeAvailability = String(availability || "InStock").replace(
+    /[^a-zA-Z]/g,
+    ""
+  );
+
   const structuredData =
-    title && price
+    safeTitle && hasValidPrice
       ? {
         "@context": "https://schema.org/",
         "@type": "Product",
-        name: title,
+        name: safeTitle,
         image: [metaImage],
         description: metaDescription,
         brand: {
           "@type": "Brand",
-          name: siteTitle
+          name: siteTitle,
         },
         offers: {
           "@type": "Offer",
           url: fullUrl,
-          priceCurrency: currency,
-          price: String(price),
-          availability: `https://schema.org/${availability}`,
-          itemCondition: "https://schema.org/NewCondition"
-        }
+          priceCurrency: currency || "INR",
+          price: numericPrice.toFixed(2),
+          availability: `https://schema.org/${safeAvailability || "InStock"}`,
+          itemCondition: "https://schema.org/NewCondition",
+        },
       }
       : null;
 
   return (
     <Helmet prioritizeSeoTags>
-
       {/* BASIC */}
       <title>{fullTitle}</title>
       <meta name="description" content={metaDescription} />
@@ -70,7 +110,7 @@ export default function SEO({
       <meta name="robots" content="index, follow" />
 
       {/* OPEN GRAPH */}
-      <meta property="og:type" content={type} />
+      <meta property="og:type" content={type || "website"} />
       <meta property="og:title" content={fullTitle} />
       <meta property="og:description" content={metaDescription} />
       <meta property="og:image" content={metaImage} />

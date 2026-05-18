@@ -1,4 +1,4 @@
-import { useNavigate, NavLink } from "react-router-dom";
+import { useNavigate, NavLink, useLocation } from "react-router-dom";
 import { useAuthStore, useCartStore } from "@/store";
 import {
   ShoppingCart,
@@ -7,82 +7,137 @@ import {
   Menu,
   X,
   ChevronRight,
-  LogOut
+  LogOut,
 } from "lucide-react";
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import SafeText from "@/components/common/SafeText";
 import { useSiteContentStore } from "@/store/siteContentStore";
 import logo from "@/assets/logo.png";
+import SafeImage from "../ui/SafeImage";
 
 const NAV_LINKS = [
   { label: "Home", path: "/", end: true },
   { label: "Men", path: "/collection/men" },
   { label: "Women", path: "/collection/women" },
   { label: "New", path: "/collection/new-arrivals" },
-  { label: "Collections", path: "/collection/featured" },
-  { label: "Sale", path: "/category/sale" }
+  { label: "Sale", path: "/collection/hot-sale" },
 ];
 
-export default function Navbar({ onCartClick }) {
+const safeQuantity = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
+
+const formatCartCount = (count) => {
+  return count > 99 ? "99+" : count;
+};
+
+export default function Navbar({ onCartClick = () => { } }) {
   const { user, logout, isAuthenticated, openAuthModal } = useAuthStore();
-  const { cart } = useCartStore();
+  const { cart = [] } = useCartStore();
   const { content, previewContent, isPreviewMode } = useSiteContentStore();
 
   const activeContent = isPreviewMode ? previewContent : content;
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+  const closeMobileMenu = useCallback(() => {
+    setMobileMenuOpen(false);
+  }, []);
+
+  const openMobileMenu = useCallback(() => {
+    setMobileMenuOpen(true);
+  }, []);
+
   useEffect(() => {
-    const handleScroll = () => setIsScrolled(window.scrollY > 8);
-    window.addEventListener("scroll", handleScroll);
+    const handleScroll = () => {
+      setIsScrolled(window.scrollY > 8);
+    };
+
+    handleScroll();
+    window.addEventListener("scroll", handleScroll, { passive: true });
+
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
+  useEffect(() => {
+    closeMobileMenu();
+  }, [location.pathname, closeMobileMenu]);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        closeMobileMenu();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [mobileMenuOpen, closeMobileMenu]);
+
   const cartCount = useMemo(() => {
     if (!Array.isArray(cart)) return 0;
-    return cart.reduce((acc, item) => acc + (item?.quantity || 0), 0);
+
+    return cart.reduce((acc, item) => acc + safeQuantity(item?.quantity), 0);
   }, [cart]);
 
   const userInitial = user?.name?.charAt(0)?.toUpperCase() || "U";
-  const userImage = user?.picture || user?.avatar || user?.image;
+  const userImage = user?.picture || user?.avatar || user?.image || "";
+  const logoUrl =
+    activeContent?.branding?.logo?.url ||
+    activeContent?.branding?.logo?.secure_url ||
+    activeContent?.branding?.logo?.secureUrl ||
+    activeContent?.branding?.logo?.imageUrl ||
+    logo;
+
+  const handleLogout = () => {
+    logout();
+    closeMobileMenu();
+  };
+
+  const handleAuthOpen = () => {
+    openAuthModal();
+    closeMobileMenu();
+  };
 
   return (
     <>
-      {/* NAVBAR */}
       <nav
         role="navigation"
-        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 min-h-[70px] flex items-center border-b ${isScrolled
-            ? "bg-white/95 backdrop-blur-lg shadow-sm py-2"
-            : "bg-white py-3"
-          }`}
+        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 h-[70px] flex items-center border-b ${isScrolled ? "bg-white/95 backdrop-blur-lg shadow-md" : "bg-white"
+          } h-[64px] md:h-[68px]`}
       >
         <div className="container-responsive flex items-center justify-between w-full h-full relative">
-
-          {/* LEFT: DESKTOP NAV & MOBILE MENU */}
-          <div className="flex-1 flex items-center justify-start">
-            {/* MOBILE MENU TOGGLE */}
+          <div className="flex-1 flex items-center justify-start h-full">
             <button
-              onClick={() => setMobileMenuOpen(true)}
+              type="button"
+              onClick={openMobileMenu}
               aria-label="Open menu"
-              className="lg:hidden p-2 -ml-2 rounded-md hover:bg-slate-100 transition text-black"
+              className="lg:hidden p-2 rounded-md hover:bg-slate-100 transition text-black"
             >
               <Menu size={24} />
             </button>
 
-            {/* DESKTOP NAV */}
-            <div className="hidden lg:flex items-center gap-8">
+            <div className="hidden lg:flex items-center gap-7 h-full">
               {NAV_LINKS.map((link) => (
                 <NavLink
                   key={link.path}
                   to={link.path}
                   end={link.end}
                   className={({ isActive }) =>
-                    `text-[11px] font-bold uppercase tracking-[0.15em] transition ${isActive
-                      ? "text-black"
-                      : "text-slate-500 hover:text-black"
+                    `text-[11px] font-bold uppercase tracking-[0.15em] transition whitespace-nowrap ${isActive ? "text-black" : "text-slate-500 hover:text-black"
                     }`
                   }
                 >
@@ -92,185 +147,201 @@ export default function Navbar({ onCartClick }) {
             </div>
           </div>
 
-          {/* CENTER: LOGO */}
-          <div className="flex-shrink-0 flex justify-center items-center absolute left-1/2 -translate-x-1/2">
+          <div className="flex-shrink-0 flex justify-center items-center absolute left-1/2 -translate-x-1/2 h-full">
             <button
+              type="button"
               onClick={() => navigate("/")}
               aria-label="Go to homepage"
-              className="flex items-center gap-3 group"
+              className="flex items-center gap-2.5 group whitespace-nowrap"
             >
-              <img
-                src={activeContent?.branding?.logo?.url || logo}
-                alt="Brand logo"
-                className="h-10 md:h-12 object-contain transition-transform group-hover:scale-105"
-                onError={(e) => (e.currentTarget.src = logo)}
-              />
-              <span className="hidden sm:block text-xl md:text-2xl font-black uppercase tracking-tighter text-black">
-                DOLLER COACH
-              </span>
+              <div className="h-9 w-9 md:h-11 md:w-11 flex items-center justify-center overflow-hidden">
+                <SafeImage
+                  src={logoUrl}
+                  alt="Brand logo"
+                  className="max-h-full max-w-full object-contain transition-transform group-hover:scale-105"
+                />
+              </div>
+              <div className="hidden sm:flex flex-col items-start justify-center text-left leading-none">
+                <span className="text-lg md:text-2xl font-black uppercase tracking-tighter text-black">
+                  DOLLER COACH
+                </span>
+                <span className="text-[8px] md:text-[9px] font-medium italic text-slate-400 tracking-wider mt-1 uppercase">
+                  by Gangwani and Company
+                </span>
+              </div>
             </button>
           </div>
 
-          {/* RIGHT: ACTIONS */}
-          <div className="flex-1 flex items-center justify-end gap-3 sm:gap-5">
-
-            {/* SEARCH */}
+          <div className="flex-1 flex items-center justify-end gap-3 sm:gap-4 h-full">
             <button
+              type="button"
               onClick={() => navigate("/search")}
-              aria-label="Search products"
+              aria-label="Search"
               className="p-2 text-black rounded-md hover:bg-slate-100 transition"
             >
               <Search size={20} strokeWidth={2.5} />
             </button>
 
-            {/* CART */}
             <button
+              type="button"
               onClick={onCartClick}
-              aria-label="Open cart"
+              aria-label="Cart"
               className="relative p-2 text-black rounded-md hover:bg-slate-100 transition"
             >
               <ShoppingCart size={20} strokeWidth={2.5} />
               {cartCount > 0 && (
-                <span className="absolute 0 right-0 bg-black text-white text-[10px] font-bold h-4 min-w-[16px] px-1 rounded-full flex items-center justify-center -translate-y-1 tranlate-x-1 border-2 border-white">
-                  {cartCount}
+                <span className="absolute top-1 right-1 bg-black text-white text-[10px] font-bold h-4 min-w-[16px] px-1 rounded-full flex items-center justify-center border-2 border-white">
+                  {formatCartCount(cartCount)}
                 </span>
               )}
             </button>
 
-            {/* USER / AUTH */}
             {isAuthenticated ? (
               <button
+                type="button"
                 onClick={() => navigate("/profile")}
-                aria-label="Profile"
-                className="h-9 w-9 overflow-hidden rounded-full border border-slate-200 bg-slate-50 flex items-center justify-center transition hover:ring-2 hover:ring-black hover:border-black"
+                aria-label="Open profile"
+                className="h-9 w-9 overflow-hidden rounded-full border border-slate-200 bg-slate-50 flex items-center justify-center transition hover:ring-2 hover:ring-black"
               >
                 {userImage ? (
-                  <img src={userImage} alt="Profile" className="w-full h-full object-cover" />
+                  <img
+                    src={userImage}
+                    alt={user?.name || "Profile"}
+                    className="w-full h-full object-cover"
+                  />
                 ) : (
                   <span className="text-sm font-bold text-black">{userInitial}</span>
                 )}
               </button>
             ) : (
               <button
+                type="button"
                 onClick={openAuthModal}
-                aria-label="Login"
-                className="hidden sm:block px-6 py-2.5 bg-black text-white text-[11px] font-bold uppercase tracking-widest transition-colors hover:bg-slate-800"
+                className="hidden sm:block px-5 py-2 bg-black text-white text-[10px] font-bold uppercase tracking-widest hover:bg-slate-800 transition-colors"
               >
                 Login
               </button>
             )}
 
-            {/* MOBILE LOGIN FALLBACK - So they can login on mobile without opening drawer if not using user icon */}
             {!isAuthenticated && (
               <button
+                type="button"
                 onClick={openAuthModal}
                 aria-label="Login"
-                className="sm:hidden p-2 text-black hover:bg-slate-100 transition rounded-md ml-1"
+                className="sm:hidden p-2 text-black hover:bg-slate-100 transition rounded-md"
               >
                 <User size={20} strokeWidth={2.5} />
               </button>
             )}
-
           </div>
-
         </div>
       </nav>
 
-      {/* MOBILE DRAWER */}
       <AnimatePresence>
         {mobileMenuOpen && (
           <>
-            {/* OVERLAY */}
             <motion.div
               className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100]"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setMobileMenuOpen(false)}
+              onClick={closeMobileMenu}
             />
 
-            {/* DRAWER */}
             <motion.aside
-              role="dialog"
-              aria-label="Mobile menu"
               initial={{ x: "-100%" }}
               animate={{ x: 0 }}
               exit={{ x: "-100%" }}
               transition={{ ease: "easeInOut", duration: 0.3 }}
               className="fixed top-0 left-0 bottom-0 w-[85%] max-w-sm bg-white z-[101] flex flex-col shadow-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Mobile navigation"
             >
-              {/* HEADER */}
-              <div className="flex items-center justify-between p-6 border-b border-slate-100">
-                <span className="text-xl font-black uppercase tracking-tight text-black">
-                  MENU
-                </span>
+              <div className="flex items-center justify-between p-6 border-b">
+                <span className="text-xl font-black uppercase text-black">MENU</span>
                 <button
-                  onClick={() => setMobileMenuOpen(false)}
+                  type="button"
+                  onClick={closeMobileMenu}
                   aria-label="Close menu"
-                  className="p-2 text-slate-400 hover:text-black transition"
+                  className="p-2 text-slate-400 hover:text-black"
                 >
                   <X size={24} />
                 </button>
               </div>
 
-              {/* LINKS */}
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {NAV_LINKS.map((link) => (
                   <NavLink
                     key={link.path}
                     to={link.path}
                     end={link.end}
-                    onClick={() => setMobileMenuOpen(false)}
+                    onClick={closeMobileMenu}
                     className={({ isActive }) =>
-                      `flex items-center justify-between text-lg font-bold uppercase tracking-widest ${isActive
-                        ? "text-black"
-                        : "text-slate-400 hover:text-black transition-colors"
+                      `flex items-center justify-between text-lg font-bold uppercase tracking-widest ${isActive ? "text-black" : "text-slate-400"
                       }`
                     }
                   >
-                    <span>{link.label}</span>
-                    <ChevronRight size={20} strokeWidth={3} className={isActive ? "opacity-100" : "opacity-0"} />
+                    {({ isActive }) => (
+                      <>
+                        <span>{link.label}</span>
+                        <ChevronRight
+                          size={20}
+                          strokeWidth={3}
+                          className={isActive ? "opacity-100" : "opacity-0"}
+                        />
+                      </>
+                    )}
                   </NavLink>
                 ))}
               </div>
 
-              {/* USER SECTION */}
-              <div className="p-6 border-t border-slate-100 bg-slate-50">
+              <div className="p-6 border-t bg-slate-50">
                 {isAuthenticated ? (
-                  <div className="flex items-center justify-between bg-white p-4 rounded border border-slate-100 shadow-sm">
-                    <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 overflow-hidden rounded-full border border-slate-200 bg-slate-100 flex items-center justify-center">
+                  <div className="flex items-center justify-between bg-white p-4 rounded border shadow-sm">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigate("/profile");
+                        closeMobileMenu();
+                      }}
+                      className="flex items-center gap-3 min-w-0 text-left"
+                    >
+                      <div className="h-10 w-10 overflow-hidden rounded-full border bg-slate-100 flex items-center justify-center shrink-0">
                         {userImage ? (
-                          <img src={userImage} alt="Profile" className="w-full h-full object-cover" />
+                          <img
+                            src={userImage}
+                            alt={user?.name || "Profile"}
+                            className="w-full h-full object-cover"
+                          />
                         ) : (
-                          <span className="text-sm font-bold text-black">{userInitial}</span>
+                          <span className="font-bold">{userInitial}</span>
                         )}
                       </div>
-                      <div>
-                        <SafeText className="text-sm font-bold text-black block tracking-wide uppercase">
+                      <div className="min-w-0">
+                        <span className="text-sm font-bold block truncate">
                           {user?.name || "User"}
-                        </SafeText>
-                        <span className="text-[10px] uppercase font-bold tracking-widest text-slate-400">
+                        </span>
+                        <span className="text-[10px] uppercase text-slate-400">
                           My Account
                         </span>
                       </div>
-                    </div>
+                    </button>
 
                     <button
-                      onClick={logout}
+                      type="button"
+                      onClick={handleLogout}
                       aria-label="Logout"
-                      className="p-2 text-red-500 hover:bg-red-50 rounded transition"
+                      className="p-2 text-red-500"
                     >
                       <LogOut size={20} />
                     </button>
                   </div>
                 ) : (
                   <button
-                    onClick={() => {
-                      openAuthModal();
-                      setMobileMenuOpen(false);
-                    }}
-                    className="w-full py-4 bg-black text-white text-xs font-bold uppercase tracking-widest transition-colors hover:bg-slate-800"
+                    type="button"
+                    onClick={handleAuthOpen}
+                    className="w-full py-4 bg-black text-white text-xs font-bold uppercase tracking-widest"
                   >
                     Login / Register
                   </button>

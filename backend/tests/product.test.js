@@ -1,32 +1,31 @@
 const request = require("supertest");
 const app = require("../server");
 const mongoose = require("mongoose");
-const User = require("../models/user.model");
+const { createTestCategory, createTestUser } = require("./testHelpers");
 
 describe("Product Flows", () => {
   let userToken;
   let adminToken;
   let productId;
+  let categoryId;
 
   beforeAll(async () => {
-    // Register a normal user
-    const userRes = await request(app).post("/api/auth/register").send({
+    const category = await createTestCategory({ name: "Electronics" });
+    categoryId = String(category._id);
+
+    const user = await createTestUser({
       name: "Normal User",
       email: "user@example.com",
-      password: "Password123",
+      role: "user",
     });
-    userToken = userRes.body.token;
+    userToken = user.token;
 
-    // Register an admin user
-    const adminRes = await request(app).post("/api/auth/register").send({
+    const admin = await createTestUser({
       name: "Admin User",
       email: "admin@example.com",
-      password: "Password123",
+      role: "admin",
     });
-    adminToken = adminRes.body.token;
-    
-    // Make the admin user an actual admin
-    await User.findOneAndUpdate({ email: "admin@example.com" }, { role: "admin" });
+    adminToken = admin.token;
   });
 
   describe("Product creation & Access Rules", () => {
@@ -35,11 +34,11 @@ describe("Product Flows", () => {
       description: "Test description",
       price: 100,
       stock: 50,
-      category: "Electronics",
+      category: "",
     };
 
     it("should deny product creation without token", async () => {
-      const res = await request(app).post("/api/products").send(newProduct);
+      const res = await request(app).post("/api/products").send({ ...newProduct, category: categoryId });
       expect(res.statusCode).toBe(401);
     });
 
@@ -47,7 +46,7 @@ describe("Product Flows", () => {
       const res = await request(app)
         .post("/api/products")
         .set("Authorization", `Bearer ${userToken}`)
-        .send(newProduct);
+        .send({ ...newProduct, category: categoryId });
       expect(res.statusCode).toBe(403);
     });
 
@@ -55,15 +54,12 @@ describe("Product Flows", () => {
       const res = await request(app)
         .post("/api/products")
         .set("Authorization", `Bearer ${adminToken}`)
-        .field("name", "Test Product")
-        .field("description", "Test description")
-        .field("price", 100)
-        .field("stock", 50)
-        .field("category", "Electronics");
+        .send({ ...newProduct, category: categoryId, status: "active" });
         
       expect(res.statusCode).toBe(201);
-      expect(res.body).toHaveProperty("name", "Test Product");
-      productId = res.body._id;
+      const product = res.body.data || res.body;
+      expect(product).toHaveProperty("name", "Test Product");
+      productId = product._id || product.id;
     });
   });
 
@@ -71,13 +67,14 @@ describe("Product Flows", () => {
     it("should fetch all products without auth", async () => {
       const res = await request(app).get("/api/products");
       expect(res.statusCode).toBe(200);
-      expect(Array.isArray(res.body.products || res.body)).toBeTruthy();
+      expect(Array.isArray(res.body.data?.products || res.body.products || res.body.data || res.body)).toBeTruthy();
     });
 
     it("should fetch a single product", async () => {
       const res = await request(app).get(`/api/products/${productId}`);
       expect(res.statusCode).toBe(200);
-      expect(res.body).toHaveProperty("_id", productId);
+      const product = res.body.data || res.body;
+      expect(product._id || product.id).toBe(productId);
     });
 
     it("should return 404 for invalid product id", async () => {
@@ -100,9 +97,10 @@ describe("Product Flows", () => {
       const res = await request(app)
         .put(`/api/products/${productId}`)
         .set("Authorization", `Bearer ${adminToken}`)
-        .field("price", 200);
+        .send({ price: 200 });
       expect(res.statusCode).toBe(200);
-      expect(res.body).toHaveProperty("price", 200);
+      const product = res.body.data || res.body;
+      expect(Number(product.price)).toBe(200);
     });
 
     it("should allow admin to delete a product", async () => {

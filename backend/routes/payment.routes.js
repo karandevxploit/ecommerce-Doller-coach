@@ -30,8 +30,16 @@ const webhookLimiter = rateLimit({
 const express = require("express");
 const rawBodyParser = express.raw({ type: "application/json", limit: "1mb" });
 
+router.post(
+    "/create",
+    isAuthenticated,
+    checkFraudBlock,
+    paymentRateLimit,
+    safeHandler(createPaymentOrder)
+);
+
 /**
- * PAYMENT ORDER CREATION
+ * PAYMENT ORDER CREATION (Existing)
  */
 router.post(
     "/create-order",

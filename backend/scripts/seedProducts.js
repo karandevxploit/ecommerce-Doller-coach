@@ -1,7 +1,6 @@
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "../.env") });
 
-const mongoose = require("mongoose");
 const connectDB = require("../config/db");
 const Product = require("../models/product.model");
 
@@ -80,7 +79,7 @@ const seedProducts = async () => {
     console.log(`Upserted: ${res.upsertedCount}`);
     console.log(`Modified: ${res.modifiedCount}`);
 
-    await mongoose.disconnect();
+    await connectDB.close();
     process.exit(0);
 
   } catch (err) {

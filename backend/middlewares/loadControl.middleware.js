@@ -1,147 +1,149 @@
 const { logger } = require("../utils/logger");
 
-// ===============================
-// CONFIG
-// ===============================
-const BASE_LAG_THRESHOLD = 200;       // ms
-const BASE_REQ_THRESHOLD = 300;       // per worker
-const COOLDOWN_RETRY_AFTER = 2;       // seconds
+const BASE_LAG_THRESHOLD = Number(process.env.LOAD_LAG_THRESHOLD_MS || 300);
+const BASE_REQ_THRESHOLD = Number(process.env.LOAD_ACTIVE_REQUEST_LIMIT || 800);
+const COOLDOWN_RETRY_AFTER = Number(process.env.LOAD_RETRY_AFTER_SECONDS || 2);
 
-// adaptive factors
 let dynamicLagThreshold = BASE_LAG_THRESHOLD;
 let dynamicReqThreshold = BASE_REQ_THRESHOLD;
-
-// ===============================
-// STATE
-// ===============================
 let eventLoopLag = 0;
 let activeRequests = 0;
+let shedCount = 0;
+let timeoutCount = 0;
 
-// ===============================
-// EVENT LOOP MONITOR (higher fidelity)
-// ===============================
-let last = process.hrtime.bigint();
-setInterval(() => {
-  const now = process.hrtime.bigint();
-  const deltaMs = Number(now - last) / 1e6;
-  // expected ~60000ms interval → extra = lag
-  eventLoopLag = Math.max(0, deltaMs - 60000);
-  last = now;
-}, 60000).unref();
+const SKIP_PATHS = ["/health", "/metrics", "/warmup"];
+const SKIP_PREFIXES = ["/uploads", "/api/uploads", "/api/payments/webhook", "/api/webhooks"];
 
-// ===============================
-// ADAPTIVE TUNER (every 30s)
-// ===============================
-setInterval(() => {
-  // simple heuristic: if lag frequently high → tighten
-  if (eventLoopLag > BASE_LAG_THRESHOLD) {
-    dynamicLagThreshold = Math.max(100, dynamicLagThreshold - 20);
-    dynamicReqThreshold = Math.max(100, dynamicReqThreshold - 20);
-  } else {
-    dynamicLagThreshold = Math.min(300, dynamicLagThreshold + 10);
-    dynamicReqThreshold = Math.min(500, dynamicReqThreshold + 10);
-  }
-
-  // logger.info("[LOAD_TUNE]", {
-  //   lag: eventLoopLag,
-  //   activeRequests,
-  //   dynamicLagThreshold,
-  //   dynamicReqThreshold
-  // });
-}, 60000).unref();
-
-// ===============================
-// REQUEST COUNTER (double-decrement safe)
-// ===============================
-const requestCounter = (req, res, next) => {
-  activeRequests++;
-
-  let decremented = false;
-  const dec = () => {
-    if (!decremented) {
-      activeRequests = Math.max(0, activeRequests - 1);
-      decremented = true;
-    }
-  };
-
-  res.on("finish", dec);
-  res.on("close", dec);
-
-  next();
+const shouldSkipControl = (req) => {
+  const path = req.path || req.originalUrl || "";
+  return SKIP_PATHS.includes(path) || SKIP_PREFIXES.some((prefix) => path.startsWith(prefix));
 };
 
-// ===============================
-// GLOBAL TIMEOUT (stream-aware)
-// ===============================
-const timeoutMiddleware = (ms = 5000) => (req, res, next) => {
-  // skip long-lived endpoints (SSE, downloads)
+const monitorEventLoop = () => {
+  let last = process.hrtime.bigint();
+
+  setInterval(() => {
+    const now = process.hrtime.bigint();
+    const deltaMs = Number(now - last) / 1e6;
+    eventLoopLag = Math.max(0, deltaMs - 1000);
+    last = now;
+  }, 1000).unref();
+};
+
+const tuneThresholds = () => {
+  setInterval(() => {
+    if (eventLoopLag > BASE_LAG_THRESHOLD) {
+      dynamicLagThreshold = Math.max(100, dynamicLagThreshold - 25);
+      dynamicReqThreshold = Math.max(200, dynamicReqThreshold - 50);
+      return;
+    }
+
+    dynamicLagThreshold = Math.min(BASE_LAG_THRESHOLD * 2, dynamicLagThreshold + 10);
+    dynamicReqThreshold = Math.min(BASE_REQ_THRESHOLD, dynamicReqThreshold + 25);
+  }, 30000).unref();
+};
+
+monitorEventLoop();
+tuneThresholds();
+
+const requestCounter = (req, res, next) => {
+  activeRequests += 1;
+
+  let done = false;
+  const dec = () => {
+    if (done) return;
+    done = true;
+    activeRequests = Math.max(0, activeRequests - 1);
+  };
+
+  res.once("finish", dec);
+  res.once("close", dec);
+
+  return next();
+};
+
+const timeoutMiddleware = (ms = 15000) => (req, res, next) => {
+  const accept = String(req.headers.accept || "");
   const isStreaming =
-    req.headers.accept === "text/event-stream" ||
-    req.headers["x-no-timeout"] === "1";
+    accept.includes("text/event-stream") ||
+    req.headers["x-no-timeout"] === "1" ||
+    shouldSkipControl(req);
 
   if (isStreaming) return next();
 
   const timer = setTimeout(() => {
+    req.timedOut = true;
+    timeoutCount += 1;
+
     if (!res.headersSent) {
       logger.warn("[TIMEOUT]", {
         method: req.method,
         url: req.originalUrl,
-        ms
+        ms,
+        activeRequests,
       });
 
       res.setHeader("Retry-After", "1");
-      res.status(504).json({
+      return res.status(504).json({
         success: false,
+        data: null,
         code: "TIMEOUT",
-        message: "Request timed out"
+        errorCode: "TIMEOUT",
+        message: "Request timed out",
       });
     }
   }, ms);
 
   const clear = () => clearTimeout(timer);
-  res.on("finish", clear);
-  res.on("close", clear);
+  res.once("finish", clear);
+  res.once("close", clear);
 
-  next();
+  return next();
 };
-
-// ===============================
-// LOAD SHEDDER (adaptive + route aware)
-// ===============================
-const SKIP_PATHS = ["/health", "/metrics"];
 
 const loadShedder = (req, res, next) => {
-  if (SKIP_PATHS.includes(req.path)) return next();
+  if (shouldSkipControl(req)) return next();
 
   const overloaded =
-    eventLoopLag > dynamicLagThreshold ||
-    activeRequests > dynamicReqThreshold;
+    activeRequests > dynamicReqThreshold ||
+    (eventLoopLag > dynamicLagThreshold && activeRequests > Math.floor(dynamicReqThreshold * 0.5));
 
-  if (overloaded) {
-    logger.error("[LOAD_SHED]", {
-      lag: eventLoopLag,
-      activeRequests,
-      path: req.originalUrl
-    });
+  if (!overloaded) return next();
 
-    res.setHeader("Retry-After", String(COOLDOWN_RETRY_AFTER));
-    res.setHeader("X-Load-Shed", "1");
+  shedCount += 1;
 
-    return res.status(503).json({
-      success: false,
-      code: "SERVER_BUSY",
-      message: "Server under load, please retry shortly"
-    });
-  }
+  logger.error("[LOAD_SHED]", {
+    lag: eventLoopLag,
+    activeRequests,
+    path: req.originalUrl,
+    dynamicLagThreshold,
+    dynamicReqThreshold,
+  });
 
-  next();
+  res.setHeader("Retry-After", String(COOLDOWN_RETRY_AFTER));
+  res.setHeader("X-Load-Shed", "1");
+
+  return res.status(503).json({
+    success: false,
+    data: null,
+    code: "SERVER_BUSY",
+    errorCode: "SERVER_BUSY",
+    message: "Server under load, please retry shortly",
+  });
 };
 
-// ===============================
-// EXPORTS
-// ===============================
+const getLoadStats = () => ({
+  eventLoopLag,
+  activeRequests,
+  dynamicLagThreshold,
+  dynamicReqThreshold,
+  shedCount,
+  timeoutCount,
+});
+
 module.exports = {
   requestCounter,
   timeoutMiddleware,
-  loadShedder
+  loadShedder,
+  getLoadStats,
 };

@@ -1,40 +1,29 @@
 const request = require("supertest");
 const app = require("../server");
 const Product = require("../models/product.model");
+const { createTestCategory, createTestUser } = require("./testHelpers");
 
 describe("Cart Flows", () => {
   let userToken;
-  let adminToken;
   let productId;
 
   beforeAll(async () => {
-    // 1. Create users
-    const userRes = await request(app).post("/api/auth/register").send({
+    const user = await createTestUser({
       name: "Cart User",
       email: "cartuser@example.com",
-      password: "Password123",
+      role: "user",
     });
-    userToken = userRes.body.token;
+    userToken = user.token;
 
-    const adminRes = await request(app).post("/api/auth/register").send({
-      name: "Cart Admin",
-      email: "cartadmin@example.com",
-      password: "Password123",
-    });
-    adminToken = adminRes.body.token;
+    const category = await createTestCategory({ name: "Cart Test" });
 
-    // 2. Make admin real admin
-    const mongoose = require("mongoose");
-    const User = require("../models/user.model");
-    await User.findOneAndUpdate({ email: "cartadmin@example.com" }, { role: "admin" });
-
-    // 3. Create a product
     const product = await Product.create({
       name: "Cart Test Product",
       description: "Desc",
       price: 50,
       stock: 10,
-      category: "Test",
+      category: category._id,
+      status: "active",
     });
     productId = product._id.toString();
   });
@@ -52,14 +41,15 @@ describe("Cart Flows", () => {
 
   it("should add item to cart", async () => {
     const res = await request(app)
-      .post("/api/cart")
+      .post("/api/cart/add")
       .set("Authorization", `Bearer ${userToken}`)
       .send({ productId, quantity: 2 });
     
     expect(res.statusCode).toBe(200);
-    expect(res.body).toHaveProperty("items");
-    expect(res.body.items.length).toBeGreaterThan(0);
-    expect(res.body.totalPrice).toBe(100);
+    const cart = res.body.data || res.body;
+    expect(cart).toHaveProperty("items");
+    expect(cart.items.length).toBeGreaterThan(0);
+    expect(cart.totalPrice).toBe(100);
   });
 
   it("should update item quantity in cart", async () => {
@@ -69,8 +59,9 @@ describe("Cart Flows", () => {
       .send({ productId, quantity: 5 });
     
     expect(res.statusCode).toBe(200);
-    expect(res.body.items.find(item => item.product._id.toString() === productId || item.product.toString() === productId).quantity).toBe(5);
-    expect(res.body.totalPrice).toBe(250);
+    const cart = res.body.data || res.body;
+    expect(cart.items.find(item => String(item.product?._id || item.product || item.productId) === productId).quantity).toBe(5);
+    expect(cart.totalPrice).toBe(250);
   });
 
   it("should remove item from cart", async () => {
@@ -79,7 +70,8 @@ describe("Cart Flows", () => {
       .set("Authorization", `Bearer ${userToken}`);
     
     expect(res.statusCode).toBe(200);
-    expect(res.body.items.length).toBe(0);
-    expect(res.body.totalPrice).toBe(0);
+    const cart = res.body.data || res.body;
+    expect(cart.items.length).toBe(0);
+    expect(cart.totalPrice).toBe(0);
   });
 });

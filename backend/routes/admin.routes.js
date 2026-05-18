@@ -1,11 +1,10 @@
 const router = require("express").Router();
 const { safeHandler } = require("../middlewares/error.middleware");
 const { requireAdmin } = require("../middlewares/auth.middleware");
-const { logger } = require("../utils/logger");
 const mongoose = require("mongoose");
 
 const {
-    stats,
+    getDashboardStats,
     listUsers,
     getRevenue,
     getOrderStats,
@@ -13,10 +12,13 @@ const {
     getRevenueTrend,
     getOrderTrend,
     verifyPaymentExternal,
-    uploadInvoiceTemplate,
+    getOrders,
+    getOffers,
+    getShipments
 } = require("../controllers/admin.controller");
 
 const productController = require("../controllers/product.controller");
+const categoryController = require("../controllers/category.controller");
 const orderController = require("../controllers/order.controller");
 const offerController = require("../controllers/offer.controller");
 const notificationController = require("../controllers/notification.controller");
@@ -42,7 +44,7 @@ const validateObjectId = (req, res, next) => {
 /**
  * ADMIN ANALYTICS (Heavy → should be cached at service layer)
  */
-router.get("/stats", safeHandler(stats));
+router.get(["/dashboard", "/stats", "/overview", "/dashboard-summary"], safeHandler(getDashboardStats));
 router.get("/revenue", safeHandler(getRevenue));
 router.get("/revenue/trend", safeHandler(getRevenueTrend));
 router.get("/orders/stats", safeHandler(getOrderStats));
@@ -55,6 +57,32 @@ router.get("/customers/stats", safeHandler(getCustomerStats));
 router.get("/users", safeHandler(listUsers));
 
 /**
+ * ADMIN: INVENTORY & SALES
+ */
+router.get("/orders", safeHandler(getOrders));
+router.get("/orders/:id", validateObjectId, safeHandler(orderController.getOrderById));
+router.post("/orders/:id/confirm", validateObjectId, safeHandler(orderController.confirmOrder));
+router.put("/orders/:id/status", validateObjectId, safeHandler(orderController.updateOrderStatus));
+router.put("/orders/:id/payment", validateObjectId, safeHandler(orderController.updatePaymentStatus));
+router.put("/orders/:id/payment-status", validateObjectId, safeHandler(orderController.updatePaymentStatus));
+router.get("/orders/:id/invoice", validateObjectId, safeHandler(orderController.downloadInvoice));
+router.get("/offers", safeHandler(getOffers));
+router.post("/offers", validateObjectId, safeHandler(offerController.createOffer));
+router.put("/offers/:id", validateObjectId, safeHandler(offerController.updateOffer));
+router.delete("/offers/:id", validateObjectId, safeHandler(offerController.deleteOffer));
+router.get("/shipments", safeHandler(getShipments));
+router.get("/products", safeHandler(productController.adminListProducts));
+router.post("/products", safeHandler(productController.createProduct));
+router.put("/products/:id", validateObjectId, safeHandler(productController.updateProduct));
+router.patch("/products/:id/status", validateObjectId, safeHandler(productController.toggleProductStatus));
+router.delete("/products/:id/video", validateObjectId, safeHandler(productController.deleteVideo));
+router.delete("/products/:id", validateObjectId, safeHandler(productController.deleteProduct));
+router.get("/categories", safeHandler(categoryController.listCategories));
+router.post("/categories", safeHandler(categoryController.createCategory));
+router.put("/categories/:id", validateObjectId, safeHandler(categoryController.updateCategory));
+router.delete("/categories/:id", validateObjectId, safeHandler(categoryController.deleteCategory));
+
+/**
  * NOTIFICATIONS
  */
 router.get("/notifications", safeHandler(notificationController.adminFeed));
@@ -63,62 +91,6 @@ router.get("/notifications", safeHandler(notificationController.adminFeed));
  * PAYMENT VERIFICATION (IDEMPOTENT REQUIRED)
  */
 router.put("/pay", safeHandler(verifyPaymentExternal));
-
-/**
- * PRODUCT MANAGEMENT
- */
-const { mediaUpload } = require("../middlewares/upload.middleware");
-const productMediaFields = mediaUpload.fields([
-    { name: "image", maxCount: 1 },
-    { name: "video", maxCount: 1 }
-]);
-
-router.get("/products", safeHandler(productController.listProducts));
-router.post("/products", productMediaFields, safeHandler(productController.createProduct));
-router.put("/products/:id", validateObjectId, productMediaFields, safeHandler(productController.updateProduct));
-router.delete("/products/:id", validateObjectId, safeHandler(productController.deleteProduct));
-
-/**
- * ORDER MANAGEMENT
- */
-router.get("/orders/export", safeHandler(orderController.exportOrders)); // consider streaming
-router.get("/orders", safeHandler(orderController.getOrders));
-router.put("/orders/:id/status", validateObjectId, safeHandler(orderController.updateOrderStatus));
-router.put("/orders/:id/pay", validateObjectId, safeHandler(orderController.updatePaymentStatus));
-
-/**
- * OFFER MANAGEMENT
- */
-router.get("/offers", safeHandler(offerController.listOffers));
-router.post("/offers", safeHandler(offerController.createOffer));
-router.put("/offers/:id", validateObjectId, safeHandler(offerController.updateOffer));
-router.delete("/offers/:id", validateObjectId, safeHandler(offerController.deleteOffer));
-
-/**
- * SECURE FILE UPLOAD (DOCX ONLY)
- */
-const { docxUpload } = require("../middlewares/upload.middleware");
-const fs = require("fs");
-
-router.post(
-    "/invoice-template",
-    docxUpload.single("template"),
-    safeHandler(async (req, res) => {
-        try {
-            await uploadInvoiceTemplate(req, res);
-
-            // Cleanup temp file
-            if (req.file?.path) {
-                fs.unlink(req.file.path, () => { });
-            }
-        } catch (err) {
-            logger.error("INVOICE_TEMPLATE_UPLOAD_FAILED", {
-                error: err.message,
-            });
-            throw err;
-        }
-    })
-);
 
 /**
  * CONFIG MANAGEMENT

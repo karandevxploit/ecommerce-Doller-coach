@@ -1,21 +1,31 @@
 const { z } = require("zod");
 
-// Base validation components
-const email = z.string().email("Invalid structural integrity for email").toLowerCase().trim();
-const password = z.string().min(8, "Password requires 8 characters minimum for compliance");
-const otp = z.string().length(6, "OTP token must be exactly 6 characters");
+const email = z.string().email("Invalid email address").toLowerCase().trim();
+const password = z.string().min(6, "Password must be at least 6 characters").max(128);
+const otp = z.string().regex(/^\d{6}$/, "OTP must be exactly 6 digits");
 
-/**
- * AUTHENTICATION SCHEMAS
- * Rejects any unknown fields via .strict() to neutralize NoSQL injection attacks.
- */
+const purpose = z.preprocess(
+  (value) => String(value || "signup").trim().toLowerCase().replace(/_/g, "-"),
+  z.enum([
+    "signup",
+    "register",
+    "email",
+    "verify-email",
+    "password-reset",
+    "reset-password",
+    "forgot-password",
+    "reset",
+    "login",
+  ]).default("signup")
+);
 
 exports.registerSchema = z.object({
   body: z.object({
-    name: z.string().min(2, "Name manifest too short").max(50).trim(),
+    name: z.string().min(2, "Name is too short").max(100).trim(),
     email,
-    password,
-  }).strict(),
+    phone: z.string().trim().optional(),
+    password: password.min(8, "Password must be at least 8 characters"),
+  }).passthrough(),
   params: z.object({}).strip(),
   query: z.object({}).strip(),
 });
@@ -23,8 +33,8 @@ exports.registerSchema = z.object({
 exports.loginSchema = z.object({
   body: z.object({
     email,
-    password,
-  }).strict(),
+    password: z.string().min(1, "Password is required"),
+  }).passthrough(),
   params: z.object({}).strip(),
   query: z.object({}).strip(),
 });
@@ -33,8 +43,8 @@ exports.verifyOtpSchema = z.object({
   body: z.object({
     email,
     otp,
-    purpose: z.enum(["signup", "password_reset", "login"]),
-  }).strict(),
+    purpose: purpose.optional().default("signup"),
+  }).passthrough(),
   params: z.object({}).strip(),
   query: z.object({}).strip(),
 });
@@ -42,9 +52,18 @@ exports.verifyOtpSchema = z.object({
 exports.resetPasswordSchema = z.object({
   body: z.object({
     email,
-    resetToken: z.string().min(1, "Reset token is required"),
-    newPassword: password,
-  }).strict(),
+    resetToken: z.string().optional(),
+    token: z.string().optional(),
+    otp: z.string().optional(),
+    newPassword: password.optional(),
+    password: password.optional(),
+  }).passthrough().refine((body) => body.resetToken || body.token || body.otp, {
+    message: "Reset token is required",
+    path: ["resetToken"],
+  }).refine((body) => body.newPassword || body.password, {
+    message: "New password is required",
+    path: ["newPassword"],
+  }),
   params: z.object({}).strip(),
   query: z.object({}).strip(),
 });
@@ -52,7 +71,10 @@ exports.resetPasswordSchema = z.object({
 exports.sendOtpSchema = z.object({
   body: z.object({
     email,
-  }).strict(),
+    purpose: purpose.optional().default("signup"),
+    name: z.string().min(2).max(100).trim().optional(),
+    password: password.optional(),
+  }).passthrough(),
   params: z.object({}).strip(),
   query: z.object({}).strip(),
 });

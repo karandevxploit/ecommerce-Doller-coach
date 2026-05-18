@@ -8,104 +8,181 @@ const { ok, fail } = require("../utils/apiResponse");
 const { safeCall } = require("../config/redis");
 const { logger } = require("../utils/logger");
 
-const MAX_ITEMS = 50;
+const MAX_ITEMS = 100;
 const CACHE_TTL = 300;
+const PRODUCT_SELECT =
+  "name title slug price originalPrice images primaryImage hoverImage category colors sizes gender stock status offer rating ratings";
 
-// ===============================
-// HELPER
-// ===============================
-const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
+const getUserId = (req) => req.user?._id || req.user?.id || req.user?.userId;
+const isValidId = (id) => mongoose.Types.ObjectId.isValid(String(id || ""));
 
-// ===============================
-// GET WISHLIST (CACHED)
-// ===============================
-exports.getWishlist = asyncHandler(async (req, res) => {
-  const userId = req.user._id;
-  const cacheKey = `wishlist:${userId}`;
-
-  // CACHE
-  const cached = await safeCall((r) => r.get(cacheKey));
-  if (cached) {
-    return ok(res, JSON.parse(cached), "Wishlist (cache)");
+const safeJsonParse = (value) => {
+  try {
+    return value ? JSON.parse(value) : null;
+  } catch {
+    return null;
   }
+};
 
-  const wishlist = await Wishlist.findOne({ userId })
-    .populate("items.productId", "title price images stock category")
+const cacheKeyFor = (userId) => `wishlist:${userId}`;
+const emptyWishlistPayload = () => ({
+  items: [],
+  products: [],
+  count: 0,
+});
+
+const invalidateWishlist = async (userId) => {
+  await safeCall((r) => r.del(cacheKeyFor(userId)));
+};
+
+const serializeProduct = (product = {}) => {
+  const id = String(product._id || product.id || product.productId || "");
+
+  return {
+    ...product,
+    id,
+    _id: id,
+    title: product.title || product.name || "",
+    name: product.name || product.title || "",
+    image: product.primaryImage || product.image || product.images?.[0] || "",
+  };
+};
+
+const extractProducts = (wishlist = {}) => {
+  const items = Array.isArray(wishlist?.items) ? wishlist.items : [];
+
+  return items
+    .map((item) => item.productId || item.product)
+    .filter(Boolean)
+    .filter((product) => product.status === "active" && product.isDeleted !== true)
+    .map(serializeProduct);
+};
+
+const getWishlistDoc = (userId) =>
+  Wishlist.findOne({ userId })
+    .populate({
+      path: "items.productId",
+      select: PRODUCT_SELECT,
+      populate: { path: "category", select: "name slug" },
+    })
     .lean();
 
-  const products = (wishlist?.items || [])
-    .map((i) => i.productId)
-    .filter(Boolean);
+// ===============================
+// GET WISHLIST
+// ===============================
+exports.getWishlist = asyncHandler(async (req, res) => {
+  const userId = getUserId(req);
+  if (!isValidId(userId)) return fail(res, "Invalid user", 400);
 
-  // CACHE SET
-  safeCall((r) =>
-    r.set(cacheKey, JSON.stringify(products), "EX", CACHE_TTL)
-  );
+  const cached = safeJsonParse(await safeCall((r) => r.get(cacheKeyFor(userId))));
+  if (cached) {
+    return ok(res, cached, "Wishlist fetched");
+  }
 
-  return ok(res, products, "Wishlist fetched");
+  const wishlist = await getWishlistDoc(userId);
+  if (!wishlist) {
+    const payload = emptyWishlistPayload();
+    safeCall((r) => r.set(cacheKeyFor(userId), JSON.stringify(payload), "EX", CACHE_TTL));
+    return ok(res, payload, "Wishlist fetched");
+  }
+
+  const products = extractProducts(wishlist);
+  const payload = {
+    items: products,
+    products,
+    count: products.length,
+  };
+
+  safeCall((r) => r.set(cacheKeyFor(userId), JSON.stringify(payload), "EX", CACHE_TTL));
+
+  return ok(res, payload, "Wishlist fetched");
 });
 
 // ===============================
-// ADD TO WISHLIST (SAFE)
+// ADD TO WISHLIST
 // ===============================
 exports.addToWishlist = asyncHandler(async (req, res) => {
+  const userId = getUserId(req);
   const { productId } = req.body || {};
-  const userId = req.user._id;
 
-  if (!productId || !isValidId(productId)) {
-    return fail(res, "Invalid product ID", 400);
-  }
+  if (!isValidId(userId)) return fail(res, "Invalid user", 400);
+  if (!isValidId(productId)) return fail(res, "Invalid product ID", 400);
 
-  // Ensure product exists
-  const exists = await Product.findById(productId).select("_id").lean();
-  if (!exists) {
-    return fail(res, "Product not found", 404);
-  }
+  const product = await Product.findOne({
+    _id: productId,
+    isDeleted: { $ne: true },
+    status: "active",
+  })
+    .select(PRODUCT_SELECT)
+    .populate("category", "name slug")
+    .lean();
 
-  // Prevent overflow
-  const current = await Wishlist.findOne({ userId }).lean();
-  if (current?.items?.length >= MAX_ITEMS) {
+  if (!product) return fail(res, "Product not found", 404);
+
+  const wishlist = await Wishlist.findOne({ userId }).select("items").lean();
+  const alreadyExists = wishlist?.items?.some((item) => String(item.productId) === String(productId));
+
+  if (!alreadyExists && wishlist?.items?.length >= MAX_ITEMS) {
     return fail(res, "Wishlist limit reached", 400);
   }
 
-  // Atomic update (prevent duplicates by productId)
-  await Wishlist.updateOne(
-    { userId, "items.productId": { $ne: productId } },
-    {
-      $push: {
-        items: {
-          productId,
-          addedAt: new Date(),
+  if (!alreadyExists) {
+    await Wishlist.updateOne(
+      { userId, "items.productId": { $ne: productId } },
+      {
+        $push: {
+          items: {
+            productId,
+            addedAt: new Date(),
+          },
         },
       },
+      { upsert: true }
+    );
+  }
+
+  await invalidateWishlist(userId);
+
+  logger.info("[WISHLIST_ADD]", { userId: String(userId), productId: String(productId) });
+
+  return ok(
+    res,
+    {
+      added: true,
+      alreadyExists: Boolean(alreadyExists),
+      product: serializeProduct(product),
+      item: serializeProduct(product),
     },
-    { upsert: true }
+    alreadyExists ? "Already in wishlist" : "Added to wishlist"
   );
-
-  // Invalidate cache
-  safeCall((r) => r.del(`wishlist:${userId}`));
-
-  return ok(res, { added: true }, "Added to wishlist");
 });
 
 // ===============================
 // REMOVE FROM WISHLIST
 // ===============================
 exports.removeFromWishlist = asyncHandler(async (req, res) => {
+  const userId = getUserId(req);
   const { productId } = req.params;
-  const userId = req.user._id;
 
-  if (!isValidId(productId)) {
-    return fail(res, "Invalid product ID", 400);
-  }
+  if (!isValidId(userId)) return fail(res, "Invalid user", 400);
+  if (!isValidId(productId)) return fail(res, "Invalid product ID", 400);
 
-  await Wishlist.updateOne(
+  const result = await Wishlist.updateOne(
     { userId },
     { $pull: { items: { productId } } }
   );
 
-  // Invalidate cache
-  safeCall((r) => r.del(`wishlist:${userId}`));
+  await invalidateWishlist(userId);
 
-  return ok(res, { removed: true }, "Removed from wishlist");
+  logger.info("[WISHLIST_REMOVE]", { userId: String(userId), productId: String(productId) });
+
+  return ok(
+    res,
+    {
+      removed: true,
+      productId: String(productId),
+      modified: Boolean(result.modifiedCount),
+    },
+    "Removed from wishlist"
+  );
 });

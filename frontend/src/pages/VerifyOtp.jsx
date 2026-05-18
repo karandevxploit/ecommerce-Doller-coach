@@ -1,66 +1,166 @@
-import { useState, useEffect } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
-  ArrowRight,
-  ShieldCheck,
+  ArrowLeft,
   Mail,
+  Clock,
   RefreshCw,
 } from "lucide-react";
-import { useAuthStore, useCartStore, useWishlistStore } from "../store";
-import { resumePendingAction } from "../utils/authActions";
-import { motion } from "framer-motion";
 import { api } from "../api/client";
+import { useAuthStore } from "../store";
+import { motion, AnimatePresence } from "framer-motion";
+
+const EMPTY_OTP = ["", "", "", "", "", ""];
 
 export default function VerifyOtp() {
-  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
+
   const { setSession } = useAuthStore();
-  const cartStore = useCartStore();
-  const wishlistStore = useWishlistStore();
 
-  const emailParam = searchParams.get("email") || "";
-  const purposeParam =
-    (searchParams.get("purpose") || "signup").toLowerCase();
+  const mountedRef = useRef(true);
+  const inputRefs = useRef([]);
+  const autoSubmitRef = useRef(false);
 
-  const [email, setEmail] = useState(emailParam);
-  const [otp, setOtp] = useState("");
+  const [otp, setOtp] = useState(EMPTY_OTP);
+  const [email, setEmail] = useState("");
+  const [source, setSource] = useState("register");
   const [loading, setLoading] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [timer, setTimer] = useState(30);
+  const [countdown, setCountdown] = useState(0);
 
-  /* ---------------- TIMER ---------------- */
+  const closePage = useCallback(() => {
+    if (window.history.length > 1) {
+      navigate(-1);
+    } else {
+      navigate("/register");
+    }
+  }, [navigate]);
+
   useEffect(() => {
-    if (timer <= 0) return;
-    const t = setInterval(() => {
-      setTimer((prev) => prev - 1);
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Get email from navigation state
+  useEffect(() => {
+    const stateEmail =
+      location.state?.email ||
+      new URLSearchParams(location.search).get("email") ||
+      "";
+
+    if (stateEmail) {
+      setEmail(String(stateEmail).trim().toLowerCase());
+      setSource(location.state?.from || "register");
+      setCountdown(Number(location.state?.otpExpiresIn) > 0 ? 0 : 0);
+      return;
+    }
+
+    navigate("/register", { replace: true });
+  }, [location.state, location.search, navigate]);
+
+  // Focus first input
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      inputRefs.current[0]?.focus();
+    }, 150);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Countdown timer for resend
+  useEffect(() => {
+    if (countdown <= 0) return undefined;
+
+    const timer = setTimeout(() => {
+      setCountdown((prev) => Math.max(0, prev - 1));
     }, 1000);
-    return () => clearInterval(t);
-  }, [timer]);
 
+    return () => clearTimeout(timer);
+  }, [countdown]);
+
+  /* ---------------- CLOSE ESC ---------------- */
   useEffect(() => {
-    if (emailParam) setEmail(emailParam);
-  }, [emailParam]);
+    const esc = (e) => {
+      if (e.key === "Escape") closePage();
+    };
 
-  /* ---------------- VALIDATION ---------------- */
-  const validate = () => {
-    if (!email.trim()) return "Please enter your email.";
-    if (!/\S+@\S+\.\S+/.test(email))
-      return "Enter a valid email address.";
-    if (otp.length !== 6)
-      return "Enter a valid 6-digit code.";
-    return "";
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, [closePage]);
+
+  /* ---------------- OTP INPUT HANDLING ---------------- */
+  const handleOtpChange = (index, value) => {
+    const digit = value.replace(/\D/g, "").slice(-1);
+
+    const newOtp = [...otp];
+    newOtp[index] = digit;
+    setOtp(newOtp);
+
+    autoSubmitRef.current = false;
+
+    if (digit && index < 5) {
+      inputRefs.current[index + 1]?.focus();
+    }
   };
 
-  /* ---------------- VERIFY ---------------- */
-  const submit = async (e) => {
-    e.preventDefault();
-    setError("");
+  const handleKeyDown = (index, e) => {
+    if (e.key === "Backspace" && !otp[index] && index > 0) {
+      inputRefs.current[index - 1]?.focus();
+      return;
+    }
 
-    const validationError = validate();
-    if (validationError) {
-      setError(validationError);
+    if (e.key === "ArrowLeft" && index > 0) {
+      inputRefs.current[index - 1]?.focus();
+      return;
+    }
+
+    if (e.key === "ArrowRight" && index < 5) {
+      inputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handlePaste = (e) => {
+    e.preventDefault();
+
+    const paste = e.clipboardData
+      .getData("text")
+      .replace(/\D/g, "")
+      .slice(0, 6);
+
+    if (!paste) return;
+
+    const newOtp = [...EMPTY_OTP];
+
+    paste.split("").forEach((char, index) => {
+      newOtp[index] = char;
+    });
+
+    setOtp(newOtp);
+    autoSubmitRef.current = false;
+
+    const nextIndex = Math.min(paste.length, 5);
+    inputRefs.current[nextIndex]?.focus();
+  };
+
+  /* ---------------- VERIFY OTP ---------------- */
+  const handleVerifyOtp = useCallback(async () => {
+    const otpString = otp.join("");
+
+    if (loading) return;
+
+    if (!email) {
+      toast.error("Email missing. Please register again.");
+      navigate("/register", { replace: true });
+      return;
+    }
+
+    if (!/^\d{6}$/.test(otpString)) {
+      toast.error("Please enter complete 6-digit OTP");
       return;
     }
 
@@ -68,172 +168,209 @@ export default function VerifyOtp() {
 
     try {
       const res = await api.post("/auth/verify-otp", {
-        email: email.trim(),
-        otp,
-        purpose:
-          purposeParam === "login" ? "login" : "signup",
+        email,
+        otp: otpString,
+        purpose: source === "login" ? "login" : "register",
       });
 
-      setSession(res);
-      toast.success("Verification successful");
+      const data = res?.data ?? res;
+      const payload = data?.data ?? data;
 
-      const resumed = await resumePendingAction({ cartStore, wishlistStore, navigate });
-      if (resumed) return;
+      const hasSession =
+        payload?.token ||
+        payload?.accessToken ||
+        payload?.user ||
+        data?.token ||
+        data?.accessToken;
 
-      navigate("/");
+      if (hasSession) {
+        setSession?.(payload);
+      }
+
+      toast.success("Email verified successfully! Welcome to Doller Coach.");
+      navigate("/", { replace: true });
     } catch (err) {
+      autoSubmitRef.current = false;
+
       const msg =
         err?.response?.data?.message ||
-        "Invalid or expired code.";
-      setError(msg);
+        "Verification failed. Please try again.";
+
       toast.error(msg);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
-  };
+  }, [otp, loading, email, source, navigate, setSession]);
 
   /* ---------------- RESEND OTP ---------------- */
-  const resendOtp = async () => {
-    if (!email.trim()) {
-      return toast.error("Enter your email first");
+  const handleResendOtp = async () => {
+    if (countdown > 0 || resendLoading) return;
+
+    if (!email) {
+      toast.error("Email missing. Please register again.");
+      navigate("/register", { replace: true });
+      return;
     }
 
-    try {
-      setResendLoading(true);
+    setResendLoading(true);
 
-      await api.post("/auth/resend-otp", {
-        email: email.trim(),
-        purpose:
-          purposeParam === "login" ? "login" : "signup",
+    try {
+      const endpoint =
+        source === "login" ? "/auth/request-login-otp" : "/auth/resend-otp";
+
+      const res = await api.post(endpoint, {
+        email,
+        purpose: source === "login" ? "login" : "register",
       });
 
-      toast.success("New code sent");
-      setTimer(30);
-    } catch {
-      toast.error("Failed to resend code");
+      const data = res?.data ?? res;
+
+      if (data?.success === false) {
+        toast.error(data?.message || "Failed to resend OTP");
+        return;
+      }
+
+      toast.success("OTP sent successfully!");
+      setCountdown(60);
+      setOtp(EMPTY_OTP);
+      autoSubmitRef.current = false;
+      inputRefs.current[0]?.focus();
+    } catch (err) {
+      const msg = err?.response?.data?.message || "Failed to resend OTP";
+      toast.error(msg);
     } finally {
-      setResendLoading(false);
+      if (mountedRef.current) {
+        setResendLoading(false);
+      }
     }
   };
 
-  /* ---------------- UI ---------------- */
+  /* ---------------- AUTO SUBMIT ON COMPLETE ---------------- */
+  useEffect(() => {
+    const otpString = otp.join("");
+
+    if (!/^\d{6}$/.test(otpString)) return undefined;
+    if (autoSubmitRef.current || loading) return undefined;
+
+    autoSubmitRef.current = true;
+
+    const timer = setTimeout(() => {
+      handleVerifyOtp();
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [otp, loading, handleVerifyOtp]);
+
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="min-h-screen flex items-center justify-center px-4 bg-gray-50"
-    >
-      <div className="w-full max-w-md bg-white border rounded-2xl p-8 shadow-sm">
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-6">
-          <div className="h-10 w-10 bg-black text-white rounded-lg flex items-center justify-center">
-            <ShieldCheck size={20} />
-          </div>
+    <AnimatePresence>
+      <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+        {/* BACKDROP */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={closePage}
+          className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        />
 
-          <div>
-            <p className="text-xs text-gray-500 uppercase">
-              Email Verification
+        {/* MODAL */}
+        <motion.div
+          initial={{ opacity: 0, scale: 0.96 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.96 }}
+          className="relative w-full max-w-md bg-white rounded-2xl shadow-xl p-8"
+        >
+          {/* HEADER */}
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Mail className="w-8 h-8 text-blue-600" />
+            </div>
+
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">
+              Verify Your Email
+            </h2>
+
+            <p className="text-gray-600">
+              We've sent a 6-digit code to
             </p>
-            <h1 className="text-xl font-semibold">
-              Enter Verification Code
-            </h1>
+
+            <p className="font-medium text-gray-900">{email}</p>
           </div>
-        </div>
 
-        {/* Form */}
-        <form onSubmit={submit} className="space-y-4">
-          {/* Error */}
-          {error && (
-            <div
-              className="bg-red-50 border border-red-200 text-red-600 px-4 py-2 rounded text-sm"
-              role="alert"
-            >
-              {error}
-            </div>
-          )}
-
-          {/* Email */}
-          <div>
-            <label className="text-sm text-gray-600">
-              Email Address
-            </label>
-            <div className="relative mt-1">
-              <Mail
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-                size={18}
-              />
+          {/* OTP INPUTS */}
+          <div className="flex justify-center gap-3 mb-8">
+            {otp.map((digit, index) => (
               <input
-                type="email"
-                value={email}
-                onChange={(e) =>
-                  setEmail(e.target.value)
-                }
-                className="w-full h-12 pl-10 pr-3 border rounded-lg focus:ring-2 focus:ring-black outline-none"
-                aria-label="Email address"
+                key={index}
+                ref={(el) => {
+                  inputRefs.current[index] = el;
+                }}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={1}
+                value={digit}
+                onChange={(e) => handleOtpChange(index, e.target.value)}
+                onKeyDown={(e) => handleKeyDown(index, e)}
+                onPaste={handlePaste}
+                className="w-12 h-12 text-center text-2xl font-bold border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none transition-colors"
+                disabled={loading}
+                aria-label={`OTP digit ${index + 1}`}
               />
-            </div>
+            ))}
           </div>
 
-          {/* OTP */}
-          <div>
-            <label className="text-sm text-gray-600">
-              Verification Code
-            </label>
-            <input
-              type="text"
-              inputMode="numeric"
-              maxLength={6}
-              value={otp}
-              onChange={(e) =>
-                setOtp(
-                  e.target.value.replace(/\D/g, "")
-                )
-              }
-              placeholder="Enter 6-digit code"
-              aria-label="Verification code"
-              className="w-full h-12 text-center text-lg tracking-widest border rounded-lg focus:ring-2 focus:ring-black outline-none"
-            />
-          </div>
-
-          {/* Submit */}
+          {/* VERIFY BUTTON */}
           <button
-            type="submit"
-            disabled={loading}
-            className="w-full h-12 bg-black text-white rounded-lg flex items-center justify-center gap-2 disabled:opacity-60"
+            type="button"
+            onClick={handleVerifyOtp}
+            disabled={loading || otp.join("").length !== 6}
+            className="w-full h-12 bg-black text-white font-semibold rounded-lg hover:bg-gray-800 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors mb-4"
           >
-            {loading
-              ? "Verifying..."
-              : "Verify Code"}
-            {!loading && <ArrowRight size={16} />}
+            {loading ? "Verifying..." : "Verify Email"}
           </button>
-        </form>
 
-        {/* Resend */}
-        <div className="mt-5 text-center text-sm text-gray-500">
-          {timer > 0 ? (
-            <p>Resend code in {timer}s</p>
-          ) : (
+          {/* RESEND SECTION */}
+          <div className="text-center">
+            <p className="text-gray-600 text-sm mb-3">
+              Didn't receive the code?
+            </p>
+
             <button
-              onClick={resendOtp}
-              disabled={resendLoading}
-              className="text-black font-medium flex items-center justify-center gap-2 mx-auto"
+              type="button"
+              onClick={handleResendOtp}
+              disabled={resendLoading || countdown > 0}
+              className="flex items-center justify-center gap-2 text-blue-600 hover:text-blue-700 disabled:text-gray-400 mx-auto"
             >
-              <RefreshCw size={14} />
-              Resend Code
-            </button>
-          )}
-        </div>
+              {resendLoading ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : countdown > 0 ? (
+                <Clock className="w-4 h-4" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
 
-        {/* Footer */}
-        <div className="mt-6 text-center text-sm">
-          <Link
-            to="/login"
-            className="text-gray-500 hover:text-black"
+              {resendLoading
+                ? "Sending..."
+                : countdown > 0
+                  ? `Resend in ${countdown}s`
+                  : "Resend Code"}
+            </button>
+          </div>
+
+          {/* BACK BUTTON */}
+          <button
+            type="button"
+            onClick={closePage}
+            className="absolute top-4 left-4 p-2 text-gray-400 hover:text-gray-600 transition-colors"
+            aria-label="Back"
           >
-            Back to login
-          </Link>
-        </div>
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+        </motion.div>
       </div>
-    </motion.div>
+    </AnimatePresence>
   );
 }

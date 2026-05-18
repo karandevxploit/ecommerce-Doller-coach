@@ -2,6 +2,10 @@ import { Navigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../../store";
 import GlobalLoader from "../ui/GlobalLoader";
 
+const normalizeRole = (role) => {
+  return String(role || "").trim().toLowerCase();
+};
+
 export default function ProtectedRoute({ children, role }) {
   const {
     isAuthenticated,
@@ -13,15 +17,17 @@ export default function ProtectedRoute({ children, role }) {
 
   const location = useLocation();
 
-  // ================= LOADING STATE =================
   if (!isInitialized || loading || isFetchingUser) {
     return <GlobalLoader isVisible />;
   }
 
-  // ================= NOT LOGGED IN =================
   if (!isAuthenticated) {
     const isAdminRoute = location.pathname.startsWith("/admin");
     const loginPath = isAdminRoute ? "/admin/login" : "/login";
+
+    if (location.pathname === loginPath) {
+      return children || null;
+    }
 
     return (
       <Navigate
@@ -35,25 +41,43 @@ export default function ProtectedRoute({ children, role }) {
     );
   }
 
-  // ================= ROLE CHECK =================
-  if (role && user?.role !== role) {
-    // Admin trying to access user page
-    if (user?.role === "admin") {
+  const requiredRole = normalizeRole(role);
+  const currentRole = normalizeRole(user?.role);
+  const isAdminRoute = location.pathname.startsWith("/admin");
+
+  if (requiredRole && currentRole !== requiredRole) {
+    if (requiredRole === "admin" || isAdminRoute) {
+      return (
+        <Navigate
+          to="/admin/login"
+          replace
+          state={{
+            from: location.pathname,
+            message: "Please login as admin to continue",
+          }}
+        />
+      );
+    }
+
+    if (currentRole === "admin" && requiredRole !== "admin") {
+      return children || null;
+    }
+
+    if (currentRole === "admin") {
       return <Navigate to="/admin/dashboard" replace />;
     }
 
-    // User trying to access admin page
     return (
       <Navigate
         to="/"
         replace
         state={{
-          message: "You don’t have access to that page",
+          from: location.pathname,
+          message: "You don't have access to that page",
         }}
       />
     );
   }
 
-  // ================= ALLOWED =================
-  return children;
+  return children || null;
 }

@@ -1,171 +1,175 @@
-const cloudinary = require("../config/cloudinary").getCloudinary();
-const { ok, fail } = require("../utils/apiResponse");
-const fs = require("fs");
 const path = require("path");
+const asyncHandler = require("express-async-handler");
 
-// ===============================
-// CONFIG
-// ===============================
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
-const MAX_VIDEO_SIZE = 20 * 1024 * 1024; // 20MB
-const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const ALLOWED_VIDEO_TYPES = ["video/mp4", "video/webm"];
+const { ok, fail } = require("../utils/apiResponse");
+const { logger } = require("../utils/logger");
 
-// ===============================
-// SAFE LOGGER
-// ===============================
-const log = (type, msg, data) => {
-  console.log(`[UPLOAD][${type}] ${msg}`, data || "");
-};
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const MAX_VIDEO_SIZE = 20 * 1024 * 1024;
 
-// ===============================
-// SAFE FILE DELETE (ASYNC)
-// ===============================
-const safeDelete = (filePath) => {
-  if (!filePath) return;
-  fs.unlink(filePath, (err) => {
-    if (err) log("WARN", "File delete failed", err.message);
-  });
-};
+const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/avif"]);
+const ALLOWED_VIDEO_TYPES = new Set(["video/mp4", "video/webm"]);
 
-// ===============================
-// VALIDATION
-// ===============================
-const validateFile = (file, allowedTypes) => {
-  if (!file) return "No file uploaded";
+const normalizeSlash = (value = "") => String(value || "").replace(/\\/g, "/");
 
-  const isVideo = file.mimetype.startsWith("video/");
-  const maxSize = isVideo ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
+const getPublicBaseUrl = (req) => {
+  const configured =
+    process.env.PUBLIC_BACKEND_URL ||
+    process.env.BASE_URL ||
+    process.env.BACKEND_URL ||
+    "";
 
-  if (file.size > maxSize) {
-    return `File too large (max ${maxSize / (1024 * 1024)}MB)`;
+  if (configured) {
+    return String(configured).replace(/\/api\/?$/, "").replace(/\/+$/, "");
   }
 
-  if (!allowedTypes.includes(file.mimetype)) {
-    return "Invalid file type";
+  if (!req) return "";
+
+  const forwardedProto = String(req.get("x-forwarded-proto") || "").split(",")[0].trim();
+  const forwardedHost = String(req.get("x-forwarded-host") || "").split(",")[0].trim();
+  const protocol = forwardedProto || req.protocol || "http";
+  const host = forwardedHost || req.get("host") || "";
+
+  return host ? `${protocol}://${host}` : "";
+};
+
+const toUploadUrl = (file = {}) => {
+  if (!file.path) return "";
+
+  const uploadsRoot = normalizeSlash(path.resolve(__dirname, "..", "uploads"));
+  const filePath = normalizeSlash(path.resolve(file.path));
+  const relativePath = filePath.startsWith(uploadsRoot)
+    ? filePath.slice(uploadsRoot.length).replace(/^\/+/, "")
+    : path.basename(filePath);
+
+  return `/uploads/${relativePath}`;
+};
+
+const isImage = (file) => ALLOWED_IMAGE_TYPES.has(file?.mimetype);
+const isVideo = (file) => ALLOWED_VIDEO_TYPES.has(file?.mimetype);
+
+const validateFile = (file, kind = "image") => {
+  if (!file) return "No file uploaded";
+
+  const allowed = kind === "video" ? ALLOWED_VIDEO_TYPES : ALLOWED_IMAGE_TYPES;
+  const maxSize = kind === "video" ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
+
+  if (!allowed.has(file.mimetype)) {
+    return kind === "video" ? "Only MP4/WebM videos allowed" : "Only JPG, PNG, WebP or AVIF images allowed";
+  }
+
+  if (Number(file.size || 0) > maxSize) {
+    return `File too large (max ${Math.round(maxSize / (1024 * 1024))}MB)`;
+  }
+
+  if (!file.path) {
+    return "Upload was not saved locally";
   }
 
   return null;
 };
 
-// ===============================
-// STREAM UPLOAD (BEST PRACTICE)
-// ===============================
-const streamUpload = (buffer, options = {}) => {
-  return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
+const normalizeUploadResult = (file = {}, kind = "image", req = null) => {
+  const url = toUploadUrl(file);
+  const baseUrl = getPublicBaseUrl(req);
+  const publicUrl = baseUrl && url ? `${baseUrl}${url}` : url;
+
+  return {
+    url,
+    publicUrl,
+    absoluteUrl: publicUrl,
+    imageUrl: kind === "image" ? url : undefined,
+    videoUrl: kind === "video" ? url : undefined,
+    secure_url: publicUrl,
+    public_id: file.filename || "",
+    publicId: file.filename || "",
+    width: null,
+    height: null,
+    duration: null,
+    size: file.size || 0,
+    format: path.extname(file.originalname || file.filename || "").replace(".", "").toLowerCase(),
+    originalName: file.originalname || "",
+    storage: "local",
+  };
+};
+
+const uploadImageFile = async (file, req = null) => {
+  const error = validateFile(file, "image");
+  if (error) {
+    const err = new Error(error);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return normalizeUploadResult(file, "image", req);
+};
+
+const uploadVideoFile = async (file, req = null) => {
+  const error = validateFile(file, "video");
+  if (error) {
+    const err = new Error(error);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return normalizeUploadResult(file, "video", req);
+};
+
+exports.uploadSingle = asyncHandler(async (req, res) => {
+  try {
+    const uploaded = await uploadImageFile(req.file, req);
+    logger.info("[UPLOAD_SINGLE_LOCAL_SUCCESS]", { file: uploaded.public_id, size: uploaded.size });
+
+    return ok(res, uploaded, "Image uploaded locally");
+  } catch (err) {
+    logger.error("[UPLOAD_SINGLE_LOCAL_ERROR]", { message: err.message });
+    return fail(res, err.message || "Upload failed", err.statusCode || 500);
+  }
+});
+
+exports.uploadMultiple = asyncHandler(async (req, res) => {
+  try {
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) return fail(res, "No files uploaded", 400);
+    if (files.length > 10) return fail(res, "Maximum 10 images allowed", 400);
+
+    const uploads = await Promise.all(files.map((file) => uploadImageFile(file, req)));
+    const urls = uploads.map((item) => item.url).filter(Boolean);
+
+    logger.info("[UPLOAD_MULTIPLE_LOCAL_SUCCESS]", { count: uploads.length });
+
+    return ok(
+      res,
       {
-        ...options,
-        quality: "auto",
-        fetch_format: "auto",
+        images: uploads,
+        files: uploads,
+        urls,
       },
-      (err, result) => {
-        if (err) return reject(err);
-        resolve(result);
-      }
+      "Images uploaded locally"
     );
-
-    stream.end(buffer);
-  });
-};
-
-exports.streamUpload = streamUpload;
-
-// ===============================
-// SINGLE IMAGE UPLOAD
-// ===============================
-exports.uploadSingle = async (req, res) => {
-  try {
-    const error = validateFile(req.file, ALLOWED_IMAGE_TYPES);
-    if (error) return fail(res, error, 400);
-
-    log("START", "Uploading image", {
-      name: req.file.originalname,
-      size: req.file.size,
-    });
-
-    const result = await streamUpload(req.file.buffer, {
-      folder: "products/images",
-    });
-
-    log("SUCCESS", "Image uploaded", result.secure_url);
-
-    return res.json({
-      success: true,
-      url: result.secure_url,
-      public_id: result.public_id,
-    });
-
   } catch (err) {
-    log("ERROR", err.message);
-    return fail(res, "Upload failed", 500);
+    logger.error("[UPLOAD_MULTIPLE_LOCAL_ERROR]", { message: err.message });
+    return fail(res, err.message || "Upload failed", err.statusCode || 500);
   }
-};
+});
 
-// ===============================
-// MULTIPLE IMAGE UPLOAD
-// ===============================
-exports.uploadMultiple = async (req, res) => {
+exports.uploadVideo = asyncHandler(async (req, res) => {
   try {
-    if (!req.files || !req.files.length) {
-      return res.status(400).json({ success: false, message: "No files uploaded" });
-    }
+    const uploaded = await uploadVideoFile(req.file, req);
+    logger.info("[UPLOAD_VIDEO_LOCAL_SUCCESS]", { file: uploaded.public_id, size: uploaded.size });
 
-    const uploads = req.files.map(async (file) => {
-      const error = validateFile(file, ALLOWED_IMAGE_TYPES);
-      if (error) throw new Error(error);
-
-      return streamUpload(file.buffer, {
-        folder: "products/images",
-      });
-    });
-
-    const results = await Promise.all(uploads);
-
-    const urls = results.map((r) => r.secure_url);
-
-    return res.json({ success: true, urls });
-
+    return ok(res, uploaded, "Video uploaded locally");
   } catch (err) {
-    log("ERROR", err.message);
-    return res.status(400).json({ success: false, message: err.message });
+    logger.error("[UPLOAD_VIDEO_LOCAL_ERROR]", { message: err.message });
+    return fail(res, err.message || "Video upload failed", err.statusCode || 500);
   }
-};
+});
 
-// ===============================
-// VIDEO UPLOAD
-// ===============================
-exports.uploadVideo = async (req, res) => {
-  try {
-    const error = validateFile(req.file, ALLOWED_VIDEO_TYPES);
-    if (error) return fail(res, error, 400);
-
-    log("START", "Uploading video", {
-      name: req.file.originalname,
-      size: req.file.size,
-    });
-
-    const result = await streamUpload(req.file.buffer, {
-      folder: "products/videos",
-      resource_type: "video",
-      eager: [
-        { format: "mp4", video_codec: "h264" },
-        { format: "webm", video_codec: "vp9" }
-      ],
-      eager_async: true
-    });
-
-    log("SUCCESS", "Video uploaded", result.secure_url);
-
-    return ok(res, {
-      url: result.secure_url,
-      publicId: result.public_id,
-      duration: result.duration || 0,
-      size: result.bytes || req.file.size,
-    });
-
-  } catch (err) {
-    log("ERROR", err.message);
-    return fail(res, "Video upload failed", 500);
-  }
+exports._private = {
+  isImage,
+  isVideo,
+  validateFile,
+  normalizeUploadResult,
+  toUploadUrl,
+  getPublicBaseUrl,
 };

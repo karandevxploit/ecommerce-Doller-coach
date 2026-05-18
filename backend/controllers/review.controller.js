@@ -4,218 +4,336 @@ const mongoose = require("mongoose");
 const Review = require("../models/review.model");
 const Product = require("../models/product.model");
 
+const cache = require("../services/cache.service");
+const { invalidateCache } = require("../middlewares/cache.middleware");
 const { ok, fail } = require("../utils/apiResponse");
 
-// ===============================
-// INCREMENTAL RATING UPDATE (FAST)
-// ===============================
-const updateProductRatingIncremental = async (productId, ratingChange, countChange, session) => {
-  const product = await Product.findById(productId).session(session);
+const isObjectId = (value) => mongoose.Types.ObjectId.isValid(String(value || ""));
 
-  if (!product) return;
+const normalizeStatus = (status = "pending") => String(status || "pending").toLowerCase();
 
-  const totalRating = (product.rating || 0) * (product.numReviews || 0);
+const serializeReview = (review = {}) => {
+  const product = review.productId || review.product || null;
 
-  const newTotal = totalRating + ratingChange;
-  const newCount = (product.numReviews || 0) + countChange;
+  return {
+    ...review,
+    id: String(review._id || review.id || ""),
+    product,
+    productId: product?._id || product?.id || product || "",
+    userName: review.user?.name || review.userName || "User",
+    productName: product?.name || product?.title || review.productName || "",
+    status: normalizeStatus(review.status),
+  };
+};
 
-  const newAvg = newCount > 0 ? newTotal / newCount : 0;
+const invalidateReviewCaches = async (productId) => {
+  await Promise.allSettled([
+    cache.del(`reviews:${productId}`),
+    invalidateCache("/api/reviews"),
+    invalidateCache("/api/products"),
+  ]);
+};
 
-  product.rating = newAvg;
-  product.numReviews = newCount;
+const recalculateProductRating = async (productId) => {
+  if (!isObjectId(productId)) return { average: 0, count: 0 };
 
-  await product.save({ session });
+  const pid = new mongoose.Types.ObjectId(productId);
+  const productMatch = { $or: [{ productId: pid }, { product: pid }] };
+
+  const [stats] = await Review.aggregate([
+    {
+      $match: {
+        ...productMatch,
+        status: "approved",
+        isDeleted: { $ne: true },
+      },
+    },
+    {
+      $group: {
+        _id: "$productId",
+        average: { $avg: "$rating" },
+        count: { $sum: 1 },
+      },
+    },
+  ]);
+
+  const average = Number((stats?.average || 0).toFixed(1));
+  const count = stats?.count || 0;
+
+  await Product.updateOne(
+    { _id: pid },
+    {
+      $set: {
+        rating: average,
+        "ratings.average": average,
+        "ratings.count": count,
+      },
+    }
+  );
+
+  return { average, count };
 };
 
 // ===============================
-// CREATE REVIEW (SAFE)
+// CREATE REVIEW
 // ===============================
 exports.createReview = asyncHandler(async (req, res) => {
-  const { productId, rating, comment } = req.body;
+  const { productId, rating, comment, images = [] } = req.body || {};
+  const userId = req.user?._id;
+  const numericRating = Number(rating);
+  const cleanComment = String(comment || "").trim();
 
-  if (!productId || !rating || !comment) {
-    return fail(res, "All fields required", 400);
+  if (!userId) return fail(res, "Authentication required", 401);
+  if (!isObjectId(productId)) return fail(res, "Invalid product", 400);
+  if (!Number.isFinite(numericRating) || numericRating < 1 || numericRating > 5) {
+    return fail(res, "Rating must be between 1-5", 400);
+  }
+  if (!cleanComment) return fail(res, "Review comment is required", 400);
+  if (cleanComment.length > 1000) return fail(res, "Review comment is too long", 400);
+
+  const product = await Product.findOne({
+    _id: productId,
+    isDeleted: { $ne: true },
+    status: { $ne: "archived" },
+  }).select("_id").lean();
+
+  if (!product) return fail(res, "Product not found", 404);
+
+  const existing = await Review.findOne({
+    user: userId,
+    isDeleted: { $ne: true },
+    $or: [{ productId }, { product: productId }],
+  }).lean();
+
+  if (existing) {
+    return fail(res, "You have already reviewed this product", 409);
   }
 
-  if (rating < 1 || rating > 5) {
-    return fail(res, "Rating must be 1-5", 400);
-  }
-
-  // Prevent duplicate review per user
-  const exists = await Review.findOne({
-    user: req.user._id,
-    product: productId,
-  });
-
-  if (exists) {
-    return fail(res, "You already reviewed this product", 409);
-  }
+  const safeImages = Array.isArray(images)
+    ? images.map((url) => String(url || "").trim()).filter(Boolean).slice(0, 5)
+    : [];
 
   const review = await Review.create({
-    user: req.user._id,
+    productId,
     product: productId,
-    rating,
-    comment,
+    user: userId,
+    rating: numericRating,
+    comment: cleanComment,
+    images: safeImages,
     status: "pending",
+    ip: req.ip || null,
+    userAgent: req.get?.("user-agent") || null,
   });
 
-  return ok(res, review, "Review submitted for approval", 201);
+  await invalidateReviewCaches(productId);
+
+  return ok(res, serializeReview(review.toObject()), "Review submitted", 201);
 });
 
 // ===============================
-// GET PRODUCT REVIEWS (OPTIMIZED)
+// GET PRODUCT REVIEWS
 // ===============================
 exports.getProductReviews = asyncHandler(async (req, res) => {
-  const { productId } = req.params;
+  const productId = req.params.productId || req.params.id;
 
-  if (!mongoose.Types.ObjectId.isValid(productId)) {
-    return ok(res, []);
+  if (!isObjectId(productId)) {
+    return ok(
+      res,
+      { reviews: [], totalReviews: 0, avgRating: 0, averageRating: 0 },
+      "Reviews fetched"
+    );
   }
 
-  const reviews = await Review.find({
-    product: productId,
-    status: "approved",
-  })
-    .select("rating comment helpfulVotes createdAt user")
-    .populate("user", "name")
-    .sort({ createdAt: -1 })
-    .limit(30)
-    .lean();
+  const cacheKey = `reviews:${productId}`;
+  const payload = await cache.getOrSet(
+    cacheKey,
+    async () => {
+      const pid = new mongoose.Types.ObjectId(productId);
 
-  return ok(res, reviews);
+      const [reviews, stats] = await Promise.all([
+        Review.find({
+          $or: [{ productId: pid }, { product: pid }],
+          status: "approved",
+          isDeleted: { $ne: true },
+        })
+          .select("rating comment images createdAt helpfulCount user productId")
+          .populate("user", "name")
+          .sort({ createdAt: -1 })
+          .limit(50)
+          .lean(),
+        Review.aggregate([
+          {
+            $match: {
+              $or: [{ productId: pid }, { product: pid }],
+              status: "approved",
+              isDeleted: { $ne: true },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              avgRating: { $avg: "$rating" },
+              totalReviews: { $sum: 1 },
+            },
+          },
+        ]),
+      ]);
+
+      const totalReviews = stats[0]?.totalReviews || 0;
+      const avgRating = Number((stats[0]?.avgRating || 0).toFixed(1));
+
+      return {
+        reviews: reviews.map(serializeReview),
+        totalReviews,
+        avgRating,
+        averageRating: avgRating,
+      };
+    },
+    60
+  );
+
+  return ok(res, payload, "Reviews fetched");
 });
 
 // ===============================
-// ADMIN LIST (SECURE)
+// ADMIN LIST
 // ===============================
 exports.adminListReviews = asyncHandler(async (req, res) => {
-  if (req.user.role !== "admin") {
-    return fail(res, "Unauthorized", 403);
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const sortBy = req.query.sortBy === "oldest" ? 1 : -1;
+  const status = normalizeStatus(req.query.status || "");
+  const query = { isDeleted: { $ne: true } };
+
+  if (["pending", "approved", "rejected"].includes(status)) {
+    query.status = status;
   }
 
-  const limit = Math.min(parseInt(req.query.limit) || 20, 50);
-  const page = Math.max(parseInt(req.query.page) || 1, 1);
+  const [reviews, total] = await Promise.all([
+    Review.find(query)
+      .populate("user", "name email")
+      .populate("productId", "name title")
+      .populate("product", "name title")
+      .sort({ createdAt: sortBy })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean(),
+    Review.countDocuments(query),
+  ]);
 
-  const data = await Review.find()
-    .populate("user", "name email")
-    .populate("product", "title")
-    .sort({ createdAt: -1 })
-    .skip((page - 1) * limit)
-    .limit(limit)
-    .lean();
+  const data = reviews.map(serializeReview);
 
-  return ok(res, data);
+  return ok(res, data, "Reviews fetched", 200, {
+    page,
+    limit,
+    total,
+    totalPages: Math.ceil(total / limit),
+    hasNextPage: page * limit < total,
+  });
 });
 
 // ===============================
-// APPROVE REVIEW (TRANSACTION SAFE)
+// APPROVE REVIEW
 // ===============================
 exports.approveReview = asyncHandler(async (req, res) => {
-  if (req.user.role !== "admin") {
-    return fail(res, "Unauthorized", 403);
+  const { id } = req.params;
+  if (!isObjectId(id)) return fail(res, "Invalid review ID", 400);
+
+  const updatedReview = await Review.findOneAndUpdate(
+    {
+      _id: id,
+      isDeleted: { $ne: true },
+      status: { $ne: "approved" },
+    },
+    {
+      $set: {
+        status: "approved",
+        moderatedBy: req.user?._id || null,
+        moderatedAt: new Date(),
+      },
+    },
+    { new: true }
+  );
+
+  const review = updatedReview
+    ? await Review.findOne({ _id: id, isDeleted: { $ne: true } })
+    .populate("user", "name email")
+    .populate("productId", "name title")
+    .populate("product", "name title")
+      .lean()
+    : null;
+
+  if (!review) {
+    const existing = await Review.findOne({ _id: id, isDeleted: { $ne: true } })
+      .populate("user", "name email")
+      .populate("productId", "name title")
+      .populate("product", "name title")
+      .lean();
+
+    if (!existing) return fail(res, "Review not found", 404);
+    return ok(res, serializeReview(existing), "Already approved");
   }
 
-  const session = await mongoose.startSession();
-  session.startTransaction();
+  await Promise.allSettled([
+    recalculateProductRating(review.productId?._id || review.productId || review.product?._id || review.product),
+    invalidateReviewCaches(review.productId?._id || review.productId || review.product?._id || review.product),
+  ]);
 
-  try {
-    const review = await Review.findById(req.params.id).session(session);
-    if (!review) {
-      await session.abortTransaction();
-      return fail(res, "Review not found", 404);
-    }
-
-    if (review.status === "approved") {
-      await session.abortTransaction();
-      return ok(res, review, "Already approved");
-    }
-
-    review.status = "approved";
-    await review.save({ session });
-
-    await updateProductRatingIncremental(
-      review.product,
-      review.rating,
-      1,
-      session
-    );
-
-    await session.commitTransaction();
-    session.endSession();
-
-    return ok(res, review, "Review approved");
-  } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
-    throw err;
-  }
+  return ok(res, serializeReview(review), "Review approved");
 });
 
 // ===============================
-// DELETE REVIEW (SAFE)
+// DELETE REVIEW
 // ===============================
 exports.deleteReview = asyncHandler(async (req, res) => {
-  if (req.user.role !== "admin") {
-    return fail(res, "Unauthorized", 403);
-  }
+  const { id } = req.params;
+  if (!isObjectId(id)) return fail(res, "Invalid review ID", 400);
 
-  const session = await mongoose.startSession();
-  session.startTransaction();
+  const review = await Review.findOneAndUpdate(
+    { _id: id, isDeleted: { $ne: true } },
+    {
+      $set: {
+        isDeleted: true,
+        status: "rejected",
+        moderatedBy: req.user?._id || null,
+        moderatedAt: new Date(),
+      },
+    },
+    { new: true }
+  ).lean();
 
-  try {
-    const review = await Review.findById(req.params.id).session(session);
-    if (!review) {
-      await session.abortTransaction();
-      return fail(res, "Review not found", 404);
-    }
+  if (!review) return fail(res, "Review not found", 404);
 
-    if (review.status === "approved") {
-      await updateProductRatingIncremental(
-        review.product,
-        -review.rating,
-        -1,
-        session
-      );
-    }
+  await Promise.allSettled([
+    recalculateProductRating(review.productId || review.product),
+    invalidateReviewCaches(review.productId || review.product),
+  ]);
 
-    await review.deleteOne({ session });
-
-    await session.commitTransaction();
-    session.endSession();
-
-    return ok(res, { deleted: true });
-  } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
-    throw err;
-  }
+  return ok(res, { deleted: true }, "Review deleted");
 });
 
 // ===============================
-// MARK HELPFUL (ANTI-SPAM)
+// MARK HELPFUL
 // ===============================
 exports.markHelpful = asyncHandler(async (req, res) => {
   const { reviewId } = req.params;
 
-  if (!mongoose.Types.ObjectId.isValid(reviewId)) {
-    return fail(res, "Invalid ID", 400);
+  if (!isObjectId(reviewId)) return fail(res, "Invalid review ID", 400);
+  if (!req.user?._id) return fail(res, "Authentication required", 401);
+
+  const result = await Review.toggleHelpful(reviewId, req.user._id);
+  const updated = await Review.findById(reviewId).select("helpfulCount helpfulBy").lean();
+
+  if (!result?.modifiedCount) {
+    return fail(res, "Unable to update helpful vote", 409);
   }
 
-  // prevent spam: user can vote once
-  const updated = await Review.updateOne(
+  return ok(
+    res,
     {
-      _id: reviewId,
-      helpfulUsers: { $ne: req.user._id },
+      helpfulCount: updated?.helpfulCount || 0,
+      marked: Boolean(updated?.helpfulBy?.some((id) => String(id) === String(req.user._id))),
     },
-    {
-      $inc: { helpfulVotes: 1 },
-      $addToSet: { helpfulUsers: req.user._id },
-    }
+    "Helpful vote updated"
   );
-
-  if (!updated.modifiedCount) {
-    return fail(res, "Already marked helpful", 409);
-  }
-
-  return ok(res, { success: true }, "Marked helpful");
 });

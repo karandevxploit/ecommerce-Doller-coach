@@ -1,38 +1,29 @@
-// services/emailQueue.service.js
-
-const { Queue } = require("bullmq");
-const redis = require("../config/redis").rawClient;
-
-const emailQueue = new Queue("email-queue", {
-  connection: redis,
-  defaultJobOptions: {
-    attempts: 5,
-    backoff: {
-      type: "exponential",
-      delay: 2000
-    },
-    removeOnComplete: true,
-    removeOnFail: false
-  }
-});
+// services/email.service.js
+const { emailQueue } = require("./queue.service");
 
 /**
- * EMAIL TEMPLATES & HELPERS
+ * EMAIL QUEUE HELPERS
+ * These functions add tasks to the background worker to prevent blocking API responses.
  */
-const sendOrderPlacedEmails = async ({ order, customer }) => {
-  await emailQueue.add("order-confirmation", { order, customer });
+
+const sendOrderPlacedEmails = async ({ orderId, customerId }) => {
+  await emailQueue.add("order-confirmation", { orderId, customerId });
 };
 
-const sendFulfillmentFailureEmail = async (order, reason) => {
-  await emailQueue.add("admin-alert", { 
-    subject: "Fulfillment Failure", 
-    orderId: order._id, 
-    reason 
+const sendOrderStatusEmail = async ({ orderId, customerId }) => {
+  await emailQueue.add("order-status-update", { orderId, customerId });
+};
+
+const sendFulfillmentFailureEmail = async (orderId, reason) => {
+  await emailQueue.add("send-email", { 
+    to: process.env.ADMIN_EMAIL || "admin@dollercoach.com",
+    subject: "Fulfillment Failure Alert", 
+    html: `<h3>Fulfillment Failed</h3><p>Order: ${orderId}</p><p>Reason: ${reason}</p>`
   });
 };
 
 module.exports = { 
-  emailQueue,
   sendOrderPlacedEmails,
+  sendOrderStatusEmail,
   sendFulfillmentFailureEmail
 };

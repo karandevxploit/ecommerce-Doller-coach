@@ -1,6 +1,6 @@
-const mongoose = require("mongoose");
 const path = require("path");
 const dotenv = require("dotenv");
+const connectDB = require("../config/db");
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
 
 const Coupon = require("../models/coupon.model");
@@ -48,9 +48,7 @@ const coupons = [
 
 const seedCoupons = async () => {
   try {
-    await mongoose.connect(process.env.MONGO_URI, {
-      serverSelectionTimeoutMS: 5000
-    });
+    await connectDB();
 
     console.log("🚀 Seeding Coupons...");
 
@@ -90,7 +88,7 @@ const seedCoupons = async () => {
     console.log(`Upserted: ${res.upsertedCount}`);
     console.log(`Modified: ${res.modifiedCount}`);
 
-    await mongoose.disconnect();
+    await connectDB.close();
     process.exit(0);
 
   } catch (err) {

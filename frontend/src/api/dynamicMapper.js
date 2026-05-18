@@ -1,287 +1,442 @@
 /**
- * dynamicMapper.js (FINAL)
- * Fully safe, normalized, crash-proof mapping layer
+ * dynamicMapper.js
+ * Fully safe, normalized mapping layer
  */
 
-// ======================
-// HELPERS
-// ======================
-const safeArray = (val) => (Array.isArray(val) ? val : []);
-const safeNumber = (val, fallback = 0) =>
-  typeof val === "number" && !isNaN(val) ? val : fallback;
+const safeArray = (value) => (Array.isArray(value) ? value : []);
 
-// ======================
-// PRODUCT
-// ======================
-export const mapProduct = (item) => {
-  if (!item || typeof item !== "object") return null;
+const safeObject = (value) => {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+};
 
-  const images = safeArray(item.images).length
-    ? item.images
-    : item.image
-      ? [item.image]
-      : [];
+const safeNumber = (value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
 
-  const variants = safeArray(item.variants).map((v) => ({
-    ...v,
-    images: safeArray(v.images),
-    sizes: safeArray(v.sizes).map((s) => ({
-      ...s,
-      discount: safeNumber(s.discount),
-      stock: safeNumber(s.stock),
-    })),
-  }));
+const safeString = (value, fallback = "") => {
+  if (value === null || value === undefined) return fallback;
+  return String(value);
+};
+
+const calculateDiscount = (price, originalPrice) => {
+  const current = safeNumber(price);
+  const original = safeNumber(originalPrice);
+
+  if (original <= 0 || current <= 0 || original <= current) return 0;
+
+  return Math.round(((original - current) / original) * 100);
+};
+
+const normalizeId = (value, fallback = "") => {
+  return safeString(value?._id || value?.id || value || fallback);
+};
+
+const isUsableImage = (value) => {
+  const image = typeof value === "string" ? value.trim() : "";
+  if (!image) return false;
+
+  return (
+    image.startsWith("http://") ||
+    image.startsWith("https://") ||
+    image.startsWith("data:image/") ||
+    image.startsWith("blob:") ||
+    image.startsWith("/uploads/") ||
+    image.startsWith("uploads/")
+  );
+};
+
+const pickFirstImage = (images, fallback = "") => {
+  const usable = safeArray(images).find(isUsableImage);
+  return usable || fallback;
+};
+
+const normalizeImageList = (item) => {
+  const images = [
+    item?.primaryImage,
+    item?.image,
+    item?.imageUrl,
+    item?.secure_url,
+    item?.src,
+    item?.thumbnail,
+    ...safeArray(item?.images),
+    ...safeArray(item?.variants).flatMap((variant) => [
+      variant?.image,
+      variant?.imageUrl,
+      variant?.thumbnail,
+      ...safeArray(variant?.images),
+    ]),
+  ].filter(isUsableImage);
+
+  if (images.length) return [...new Set(images)];
+
+  return [];
+};
+
+export const mapProduct = (item = {}) => {
+  const source = safeObject(item);
+  const images = normalizeImageList(source);
+
+  const variants = safeArray(source.variants).map((variant) => {
+    const variantSource = safeObject(variant);
+    const variantImages = normalizeImageList(variantSource);
+    const flatSize = variantSource.size || variantSource.name || "";
+    const nestedSizes = safeArray(variantSource.sizes).map((size) => ({
+      ...safeObject(size),
+      size: size?.size || size?.name || size?.label || "",
+      discount: safeNumber(size?.discount),
+      stock: safeNumber(size?.stock),
+    }));
+
+    return {
+      ...variantSource,
+      image: pickFirstImage(
+        [variantSource.image, variantSource.imageUrl, variantSource.thumbnail, variantImages[0]],
+        ""
+      ),
+      images: variantImages,
+      sizes: nestedSizes.length
+        ? nestedSizes
+        : flatSize
+          ? [{ size: flatSize, stock: safeNumber(variantSource.stock) }]
+          : [],
+      price: safeNumber(variantSource.price),
+      stock: safeNumber(variantSource.stock),
+      size: flatSize,
+    };
+  });
+
+  const firstVariantPrice = safeNumber(variants?.[0]?.price);
+  const price = safeNumber(source.price, firstVariantPrice);
+  const originalPrice = safeNumber(source.originalPrice ?? source.mrp, price);
+  const discount = safeNumber(source.discount, calculateDiscount(price, originalPrice));
+  const variantStock = variants.reduce((total, variant) => {
+    const sizeStock = safeArray(variant?.sizes).reduce(
+      (sum, size) => sum + safeNumber(size?.stock),
+      0
+    );
+
+    return total + (sizeStock || safeNumber(variant?.stock));
+  }, 0);
+
+  const category =
+    typeof source.category === "string"
+      ? {
+        id: source.category,
+        _id: source.category,
+        slug: source.category,
+        name: source.category,
+        main: source.category.toUpperCase(),
+        sub: "",
+        type: "",
+        gender: source.gender || "",
+        brand: "DOLLER COACH",
+        tags: safeArray(source.tags),
+      }
+      : {
+        id: normalizeId(source.category),
+        _id: normalizeId(source.category),
+        slug: source.category?.slug || "",
+        name: source.category?.name || "",
+        main: source.category?.main || source.category?.name || "MEN",
+        sub: source.category?.sub || source.subcategory || "",
+        type: source.category?.type || source.productType || "",
+        gender: source.category?.gender || source.gender || "",
+        brand: source.category?.brand || source.brand || "DOLLER COACH",
+        tags: safeArray(source.tags),
+      };
 
   return {
-    id: String(item._id || item.id || ""),
+    id: normalizeId(source),
+    _id: normalizeId(source),
 
-    title: item.name || item.title || "Unnamed Product",
-    description: item.description || "",
-    shortDescription: item.shortDescription || "",
-    fullDescription: item.fullDescription || "",
+    title: source.name || source.title || "Unnamed Product",
+    description: source.description || "",
+    shortDescription: source.shortDescription || "",
+    fullDescription: source.fullDescription || "",
 
-    brand: item.brand || "",
-    subcategory: item.subcategory || "",
-    productType: item.productType || "",
+    brand: source.brand || "",
+    subcategory: source.subcategory || "",
+    productType: source.productType || "",
 
-    price: safeNumber(item.price) || safeNumber(variants[0]?.price),
-    originalPrice: safeNumber(item.originalPrice || item.price) || safeNumber(variants[0]?.price),
+    price,
+    originalPrice,
 
     images,
-    image: item.primaryImage || images[0] || "/placeholder.png",
-    hoverImage: item.hoverImage || images[1] || images[0] || "/placeholder.png",
+    image: pickFirstImage([source.primaryImage, images[0]]),
+    hoverImage: pickFirstImage([source.hoverImage, images[1], images[0]]),
 
-    video: item.video || "",
+    video: source.video?.url || (typeof source.video === "string" ? source.video : ""),
 
-    // CATEGORY SAFE NORMALIZATION
-    category:
-      typeof item.category === "string"
-        ? {
-          main: item.category.toUpperCase(),
-          sub: "",
-          type: "",
-          brand: "DOLLER COACH",
-          tags: safeArray(item.tags),
-        }
-        : {
-          main: item.category?.main || "MEN",
-          sub: item.category?.sub || "",
-          type: item.category?.type || "",
-          brand: item.category?.brand || "DOLLER COACH",
-          tags: safeArray(item.tags),
-        },
+    category,
+    type: source.type || source.productType || "TOPWEAR",
 
-    type: item.type || "TOPWEAR",
+    stock: source.stock === undefined || source.stock === null
+      ? variantStock
+      : safeNumber(source.stock),
+    status: source.status || (source.isActive === false ? "inactive" : "active"),
 
-    stock: safeNumber(item.stock),
-    status: item.status || "active",
-
-    // ADVANCED FIELDS (HOT SELL LOGIC)
     variants,
 
     offer: {
-      text: item.offer?.text || item.offerText || "",
-      type: item.offer?.offerType || "PERCENTAGE",
-      expiry: item.offer?.expiry || null,
-      isHighlighted: !!item.offer?.isHighlighted,
-      enabled: !!item.offer?.enabled,
+      text: source.offer?.text || source.offerText || "",
+      type: source.offer?.offerType || source.offer?.type || "PERCENTAGE",
+      title: source.offer?.title || "",
+      discount: safeNumber(source.offer?.discount),
+      couponCode: source.offer?.couponCode || "",
+      startDate: source.offer?.startDate || null,
+      expiryDate: source.offer?.expiryDate || source.offer?.expiry || null,
+      isActive: Boolean(source.offer?.isActive || source.offer?.enabled),
     },
 
-    // COMPUTED DISCOUNT
-    discount: item.discount ?? (
-      item.originalPrice > item.price 
-        ? Math.round(((item.originalPrice - item.price) / item.originalPrice) * 100) 
-        : 0
-    ),
+    discount,
 
-    // COMPUTED HOT SELL STATUS
-    isHot: !!item.isHot || 
-          (Math.round(((item.originalPrice - item.price) / item.originalPrice) * 100) >= 50) ||
-          (safeNumber(item.salesCount) > 50),
+    isHot:
+      Boolean(source.isHot) ||
+      discount >= 50 ||
+      safeNumber(source.salesCount) > 50,
 
     badge: {
       text:
-        item.badge?.text ||
-        (typeof item.badge === "string" ? item.badge : ""),
-      color: item.badge?.color || "#0f172a",
-      type: item.badge?.badgeType || "solid",
-      icon: item.badge?.icon || "",
-      enabled: !!item.badge?.enabled,
+        source.badge?.text ||
+        (typeof source.badge === "string" ? source.badge : ""),
+      color: source.badge?.color || "#0f172a",
+      type: source.badge?.badgeType || source.badge?.type || "solid",
+      icon: source.badge?.icon || "",
+      enabled: Boolean(source.badge?.enabled),
     },
 
     ratings: {
-      average: safeNumber(item.ratings?.average || item.rating),
-      count: safeNumber(item.ratings?.count || item.numReviews),
-      enabled: item.ratings?.enabled !== false,
+      average: safeNumber(source.ratings?.average ?? source.rating),
+      count: safeNumber(source.ratings?.count ?? source.numReviews),
+      enabled: source.ratings?.enabled !== false,
     },
 
     seo: {
-      title: item.seo?.metaTitle || "",
-      description: item.seo?.metaDescription || "",
-      image: item.seo?.ogImage || "",
+      title: source.seo?.metaTitle || source.seo?.title || "",
+      description: source.seo?.metaDescription || source.seo?.description || "",
+      image: source.seo?.ogImage || source.seo?.image || "",
     },
 
     controls: {
-      cod: item.controls?.codAllowed !== false,
-      eta: item.controls?.showETA !== false,
-      wishlist: item.controls?.allowWishlist !== false,
+      cod: source.controls?.codAllowed !== false,
+      eta: source.controls?.showETA !== false,
+      wishlist: source.controls?.allowWishlist !== false,
     },
 
-    colorsAvailable:
-      item.colorsAvailable || (variants.length ? variants.length : 1),
+    colorsAvailable: safeNumber(
+      source.colorsAvailable,
+      variants.length ? variants.length : 1
+    ),
 
-    featured: !!item.featured,
-    trending: !!item.isTrending || !!item.trending,
-    isNew: !!item.isNewlyLaunched || !!item.isNew,
-    isBestSeller: !!item.isBestSeller,
+    featured: Boolean(source.featured),
+    trending: Boolean(source.isTrending || source.trending),
+    isNew: Boolean(source.isNewlyLaunched || source.isNew),
+    isBestSeller: Boolean(source.isBestSeller),
 
-    sizes: safeArray(item.sizes).length 
-      ? safeArray(item.sizes) 
-      : [...new Set(variants.map(v => v.size).filter(Boolean))],
-    topSizes: safeArray(item.topSizes),
-    bottomSizes: safeArray(item.bottomSizes),
+    sizes: safeArray(source.sizes).length
+      ? safeArray(source.sizes)
+      : [
+        ...new Set(
+          variants
+            .flatMap((variant) => [
+              variant.size,
+              ...safeArray(variant.sizes).map((size) => size?.size),
+            ])
+            .filter(Boolean)
+        ),
+      ],
+    topSizes: safeArray(source.topSizes),
+    bottomSizes: safeArray(source.bottomSizes),
   };
 };
 
-// ======================
-// USER
-// ======================
-export const mapUser = (data) => {
-  if (!data) return null;
-
-  const isObj = typeof data === "object";
+export const mapUser = (data = {}) => {
+  const source = safeObject(data);
 
   return {
-    id: isObj ? data._id || data.id || "" : data,
-    name: isObj ? data.name || "User" : "User",
-    email: isObj ? data.email || "" : "",
-    role: isObj ? data.role || "user" : "user",
-    avatar: isObj ? data.avatar || "" : "",
-    isVerified: isObj ? !!data.isVerified : false,
+    id: normalizeId(source),
+    _id: normalizeId(source),
+    name: source.name || source.fullName || "User",
+    email: source.email || "",
+    role: source.role || "user",
+    avatar: source.avatar || source.profileImage || "",
+    isVerified: Boolean(source.isVerified || source.verified),
+    createdAt: source.createdAt || source.updatedAt || null,
   };
 };
 
-// ======================
-// CART ITEM
-// ======================
-export const mapCartItem = (item) => {
-  if (!item) return null;
-
-  const source = item.productId || item.product || {};
-  const isPopulated = typeof source === "object" && source !== null;
-
-  const product = isPopulated ? source : item;
-  const mapped = mapProduct(product);
-
-  if (!mapped) return null;
+export const mapCartItem = (item = {}) => {
+  const source = safeObject(item);
+  const productSource = source.productId || source.product || source;
+  const product = mapProduct(productSource);
 
   return {
-    ...mapped,
-    id: isPopulated
-      ? source._id || source.id
-      : item.productId || mapped.id,
-
-    cartItemId: item._id || item.id || mapped.id,
-
-    quantity: safeNumber(item.quantity, 1),
-
-    size: item.size || "",
-    topSize: item.topSize || "",
-    bottomSize: item.bottomSize || "",
+    ...product,
+    id: normalizeId(productSource, product.id),
+    cartItemId: normalizeId(source, product.id),
+    quantity: safeNumber(source.quantity, 1),
+    size: source.size || "",
+    topSize: source.topSize || "",
+    bottomSize: source.bottomSize || "",
+    color: source.color || "",
+    variantIdx: source.variantIdx ?? null,
+    variantKey: source.variantKey || "",
+    price: safeNumber(source.price, product.price),
+    title: source.title || product.title,
+    image: source.image || product.image,
   };
 };
 
-// ======================
-// ORDER
-// ======================
-export const mapOrder = (order) => {
-  if (!order) return null;
+export const mapOrder = (order = {}) => {
+  const source = safeObject(order);
+  const shipping = source.shippingAddress || source.address || {};
+  const user = source.userId || source.user || source.customer || {};
 
-  const shipping = order.shippingAddress || {};
+  const products = safeArray(source.products?.length ? source.products : source.items)
+    .map(mapCartItem)
+    .filter(Boolean);
+
+  const paymentStatus =
+    source.paymentStatus || (source.isPaid ? "PAID" : "PENDING");
 
   return {
-    id: order._id || order.id || "",
-    _id: order._id || order.id || "",
+    id: normalizeId(source),
+    _id: normalizeId(source),
 
-    invoiceNumber: order.invoiceNumber || "N/A",
+    invoiceNumber: source.invoiceNumber || "N/A",
 
-    subtotal: safeNumber(order.subtotal ?? order.subtotalAmount),
-    discount: safeNumber(order.discount ?? order.discountAmount),
-    delivery: safeNumber(order.delivery ?? order.deliveryFee),
-    gst: safeNumber(order.gst ?? order.gstAmount),
-    total: safeNumber(order.total ?? order.totalAmount),
+    subtotal: safeNumber(source.subtotal ?? source.subtotalAmount),
+    discount: safeNumber(source.discount ?? source.discountAmount),
+    delivery: safeNumber(source.delivery ?? source.deliveryFee),
+    codFee: safeNumber(source.codFee ?? source.cod_fee ?? source.charges?.codFee),
+    gst: safeNumber(source.gst ?? source.gstAmount),
+    gstPercent: safeNumber(source.gstPercent ?? source.gst_percent, 18),
+    total: safeNumber(source.total ?? source.totalAmount ?? source.amount),
 
-    status: order.status || "placed",
+    status: source.status || "placed",
 
-    paymentMethod: order.paymentMethod || "COD",
-    paymentStatus:
-      order.paymentStatus || (order.isPaid ? "PAID" : "PENDING"),
+    paymentMethod: source.paymentMethod || "COD",
+    paymentStatus,
 
-    createdAt: order.createdAt || new Date().toISOString(),
+    createdAt: source.createdAt || source.updatedAt || null,
 
-    products: safeArray(order.products)
-      .map(mapCartItem)
-      .filter(Boolean),
+    products,
+    user: mapUser(user),
 
-    user: mapUser(order.userId),
+    address: shipping,
 
     shippingAddress: {
-      name: shipping.name || "N/A",
-      phone: shipping.phone || "N/A",
-      address: shipping.address || "N/A",
+      name: shipping.name || shipping.fullName || user?.name || "N/A",
+      phone: shipping.phone || source.phone || user?.phone || "N/A",
+      address: shipping.address || shipping.addressLine1 || shipping.street || "N/A",
       city: shipping.city || "",
       state: shipping.state || "",
-      pincode: shipping.pincode || "",
+      pincode: shipping.pincode || shipping.zip || shipping.postalCode || "",
     },
 
-    isPaid: !!order.isPaid,
-    paidAt: order.paidAt || null,
+    phone: shipping.phone || source.phone || user?.phone || "",
+
+    isPaid: Boolean(
+      source.isPaid || String(paymentStatus).toUpperCase() === "PAID"
+    ),
+    paidAt: source.paidAt || null,
 
     shiprocket: {
-      orderId: order.shiprocket?.orderId || null,
-      shipmentId: order.shiprocket?.shipmentId || null,
-      awbCode: order.shiprocket?.awbCode || null,
-      courierName: order.shiprocket?.courierName || null,
-      trackingUrl: order.shiprocket?.trackingUrl || null,
-      status: order.shiprocket?.status || "NOT_SYNCED",
-    }
+      orderId: source.shiprocket?.orderId || null,
+      shipmentId: source.shiprocket?.shipmentId || null,
+      awbCode: source.shiprocket?.awbCode || null,
+      courierName: source.shiprocket?.courierName || null,
+      trackingUrl: source.shiprocket?.trackingUrl || null,
+      status: source.shiprocket?.status || "NOT_SYNCED",
+    },
+
+    shipment: {
+      shipmentId:
+        source.shipment?.shipment_id ||
+        source.shipment?.shipmentId ||
+        source.shiprocket?.shipmentId ||
+        null,
+      awbCode:
+        source.shipment?.awb_code ||
+        source.shipment?.awbCode ||
+        source.shiprocket?.awbCode ||
+        null,
+      courierName:
+        source.shipment?.courier_name ||
+        source.shipment?.courierName ||
+        source.shiprocket?.courierName ||
+        null,
+      trackingUrl:
+        source.shipment?.tracking_url ||
+        source.shipment?.trackingUrl ||
+        source.shiprocket?.trackingUrl ||
+        null,
+      estimatedDelivery:
+        source.shipment?.estimated_delivery ||
+        source.shipment?.estimatedDelivery ||
+        null,
+      status: source.shipment_status || source.shipment?.status || "pending",
+      lastUpdatedAt:
+        source.shipment?.last_updated_at ||
+        source.shipment?.lastUpdatedAt ||
+        null,
+    },
+
+    shipment_status: source.shipment_status || source.shipment?.status || "pending",
   };
 };
 
-// ======================
-// OFFER
-// ======================
-export const mapOffer = (offer) => {
-  if (!offer) return null;
+export const mapOffer = (offer = {}) => {
+  const source = safeObject(offer);
+  const discountValue = safeNumber(source.discountValue ?? source.discount);
 
   return {
-    id: offer._id || offer.id || "",
-    title: offer.title || "Special Offer",
-    description: offer.description || "",
-    image: offer.image || "",
-    link: offer.link || "/",
-    isActive: !!offer.isActive,
-    status: offer.status || "OFF",
-    endDate: offer.endDate || null,
-    couponCode: offer.couponCode || "",
-    discountType: offer.discountType || "percentage",
-    discountValue: safeNumber(offer.discountValue),
+    id: normalizeId(source),
+    _id: normalizeId(source),
+    title: source.title || "Special Offer",
+    description: source.description || "",
+    image: source.image || source.imageUrl || "",
+    link: source.link || "/",
+    isActive: Boolean(source.isActive),
+    status: source.status || (source.isActive ? "ACTIVE" : "OFF"),
+    startDate: source.startDate || null,
+    endDate: source.endDate || null,
+    remainingTime: safeNumber(source.remainingTime),
+    couponCode: source.couponCode || "",
+    discountType: source.discountType || "percentage",
+    discountValue,
+    discount: discountValue,
+    usageLimit: safeNumber(source.usageLimit),
+    usedCount: safeNumber(source.usedCount),
+    perUserLimit: safeNumber(source.perUserLimit),
+    minOrderAmount: safeNumber(source.minOrderAmount),
+    maxDiscount:
+      source.maxDiscount === null || source.maxDiscount === undefined
+        ? null
+        : safeNumber(source.maxDiscount),
   };
 };
 
-// ======================
-// REVIEW
-// ======================
-export const mapReview = (review) => {
-  if (!review) return null;
+export const mapReview = (review = {}) => {
+  const source = safeObject(review);
 
   return {
-    id: review._id || review.id || "",
-    user: review.user?.name || "Anonymous",
-    product: review.product?.title || "Product",
-    rating: safeNumber(review.rating),
-    comment: review.comment || "",
-    status: review.status || "pending",
-    createdAt: review.createdAt || new Date().toISOString(),
+    id: normalizeId(source),
+    _id: normalizeId(source),
+    user:
+      source.user?.name ||
+      source.userName ||
+      source.customer?.name ||
+      "Anonymous",
+    product:
+      source.product?.title ||
+      source.product?.name ||
+      source.productName ||
+      "Product",
+    rating: Math.min(Math.max(safeNumber(source.rating), 0), 5),
+    comment: source.comment || source.review || source.message || "",
+    status: source.status || (source.isApproved ? "approved" : "pending"),
+    createdAt: source.createdAt || source.updatedAt || null,
   };
 };

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
@@ -19,6 +19,8 @@ import { motion, AnimatePresence } from "framer-motion";
 
 export default function Register() {
   const navigate = useNavigate();
+  const mountedRef = useRef(true);
+
   const { openAuthModal } = useAuthStore();
 
   const [showPassword, setShowPassword] = useState(false);
@@ -29,39 +31,108 @@ export default function Register() {
     isSubmitting,
     handleChange,
     handleSubmit,
+    setFieldValue,
   } = useForm(
     { name: "", email: "", phone: "", password: "" },
     registerValidator
   );
 
+  const closePage = () => {
+    if (window.history.length > 1) {
+      navigate(-1);
+    } else {
+      navigate("/");
+    }
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   /* ---------------- CLOSE ESC ---------------- */
   useEffect(() => {
     const esc = (e) => {
-      if (e.key === "Escape") navigate("/");
+      if (e.key === "Escape") closePage();
     };
+
     window.addEventListener("keydown", esc);
     return () => window.removeEventListener("keydown", esc);
-  }, [navigate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  /* ---------------- REGISTER ---------------- */
+  /* ---------------- REGISTER WITH ERROR HANDLING ---------------- */
   const handleRegister = async (formData) => {
+    const payload = {
+      name: formData.name?.trim() || "",
+      email: formData.email?.toLowerCase().trim() || "",
+      password: formData.password || "",
+      phone: formData.phone?.replace(/\D/g, "").slice(0, 10) || undefined,
+    };
+
+    if (!payload.name || !payload.email || !payload.password) {
+      toast.error("Please fill in all required fields");
+      return;
+    }
+
+    if (payload.phone && payload.phone.length !== 10) {
+      toast.error("Please enter a valid 10-digit mobile number");
+      return;
+    }
+
     try {
-      await api.post("/auth/register", {
-        ...formData,
-      });
+      const res = await api.post("/auth/register", payload);
+      const data = res?.data ?? res;
 
-      toast.success("Verification code sent to your email");
+      const success =
+        data?.success === true ||
+        data?.data?.success === true ||
+        data?.message?.toLowerCase?.().includes("success");
 
-      navigate(
-        `/verify?email=${encodeURIComponent(
-          formData.email
-        )}&purpose=signup`
+      if (!success && data?.success === false) {
+        toast.error(data?.message || "Registration failed. Please try again.");
+        return;
+      }
+
+      toast.success(
+        data?.message ||
+        "Registration successful! Check your email for verification code."
       );
+
+      navigate("/verify-otp", {
+        state: {
+          email: payload.email,
+          from: "register",
+          otpExpiresIn: data?.otpExpiresIn || data?.data?.otpExpiresIn,
+        },
+        replace: true,
+      });
     } catch (err) {
-      const msg =
-        err?.response?.data?.message ||
-        "Registration failed. Please try again.";
-      toast.error(msg);
+      const status = err?.response?.status;
+      let errorMsg = err?.response?.data?.message || "Registration failed";
+
+      if (status === 400) {
+        errorMsg = errorMsg || "Please check your input and try again.";
+      } else if (status === 409) {
+        errorMsg =
+          errorMsg || "This email is already registered. Please login instead.";
+      } else if (status === 503) {
+        errorMsg = "Our servers are temporarily down. Please try again later.";
+      } else if (status >= 500) {
+        errorMsg = "An unexpected error occurred. Please try again later.";
+      } else if (err.code === "ECONNABORTED") {
+        errorMsg =
+          "Request took too long. Please check your connection and try again.";
+      } else if (!err.response) {
+        errorMsg = "Network error. Please check your connection.";
+      }
+
+      if (mountedRef.current) {
+        toast.error(errorMsg);
+      }
     }
   };
 
@@ -74,7 +145,7 @@ export default function Register() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          onClick={() => navigate(-1)}
+          onClick={closePage}
           className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         />
 
@@ -92,7 +163,8 @@ export default function Register() {
             </h2>
 
             <button
-              onClick={() => navigate(-1)}
+              type="button"
+              onClick={closePage}
               aria-label="Close"
               className="p-2 rounded hover:bg-gray-100"
             >
@@ -102,9 +174,7 @@ export default function Register() {
 
           {/* FORM */}
           <form
-            onSubmit={(e) =>
-              handleSubmit(e, handleRegister)
-            }
+            onSubmit={(e) => handleSubmit(e, handleRegister)}
             className="space-y-4"
           >
             {/* NAME */}
@@ -115,6 +185,7 @@ export default function Register() {
               onChange={handleChange}
               placeholder="Full name"
               error={errors.name}
+              autoComplete="name"
             />
 
             {/* EMAIL */}
@@ -122,10 +193,13 @@ export default function Register() {
               icon={<Mail size={16} />}
               name="email"
               value={values.email}
-              onChange={handleChange}
+              onChange={(e) => {
+                setFieldValue("email", e.target.value.toLowerCase());
+              }}
               placeholder="Email address"
               error={errors.email}
               type="email"
+              autoComplete="email"
             />
 
             {/* PHONE */}
@@ -134,16 +208,16 @@ export default function Register() {
               name="phone"
               value={values.phone}
               onChange={(e) =>
-                handleChange({
-                  target: {
-                    name: "phone",
-                    value: e.target.value.replace(/\D/g, ""),
-                  },
-                })
+                setFieldValue(
+                  "phone",
+                  e.target.value.replace(/\D/g, "").slice(0, 10)
+                )
               }
               placeholder="10-digit mobile number"
               error={errors.phone}
               type="tel"
+              inputMode="numeric"
+              autoComplete="tel"
             />
 
             {/* PASSWORD */}
@@ -155,29 +229,24 @@ export default function Register() {
                 />
 
                 <input
-                  type={
-                    showPassword ? "text" : "password"
-                  }
+                  type={showPassword ? "text" : "password"}
                   name="password"
                   value={values.password}
                   onChange={handleChange}
                   placeholder="Create password"
                   aria-label="Password"
-                  className="w-full h-12 pl-10 pr-10 border rounded-lg focus:ring-2 focus:ring-black outline-none"
+                  autoComplete="new-password"
+                  className={`w-full h-12 pl-10 pr-10 border rounded-lg focus:ring-2 focus:ring-black outline-none ${errors.password ? "border-red-500" : ""
+                    }`}
                 />
 
                 <button
                   type="button"
-                  onClick={() =>
-                    setShowPassword((p) => !p)
-                  }
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500"
                 >
-                  {showPassword ? (
-                    <EyeOff size={16} />
-                  ) : (
-                    <Eye size={16} />
-                  )}
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
 
@@ -194,12 +263,8 @@ export default function Register() {
               disabled={isSubmitting}
               className="w-full h-12 bg-black text-white rounded-lg flex items-center justify-center gap-2 disabled:opacity-60"
             >
-              {isSubmitting
-                ? "Creating account..."
-                : "Create Account"}
-              {!isSubmitting && (
-                <ArrowRight size={16} />
-              )}
+              {isSubmitting ? "Creating account..." : "Create Account"}
+              {!isSubmitting && <ArrowRight size={16} />}
             </button>
           </form>
 
@@ -207,9 +272,10 @@ export default function Register() {
           <div className="mt-6 text-center text-sm text-gray-500">
             Already have an account?{" "}
             <button
+              type="button"
               onClick={() => {
                 navigate("/");
-                openAuthModal();
+                setTimeout(() => openAuthModal?.(), 0);
               }}
               className="text-black font-medium hover:underline"
             >
@@ -223,11 +289,7 @@ export default function Register() {
 }
 
 /* ---------------- REUSABLE INPUT ---------------- */
-function Input({
-  icon,
-  error,
-  ...props
-}) {
+function Input({ icon, error, ...props }) {
   return (
     <div>
       <div className="relative">

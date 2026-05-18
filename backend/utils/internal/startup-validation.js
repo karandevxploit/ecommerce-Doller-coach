@@ -1,6 +1,7 @@
-const { chalk } = require('../logger');
 const path = require('path');
 const fs = require('fs');
+const chalk = require('chalk');
+const env = require('../../config/env');
 
 /**
  * STRICT STARTUP VALIDATION
@@ -10,7 +11,9 @@ const fs = require('fs');
 const requiredEnv = [
   'NODE_ENV',
   'PORT',
-  'MONGO_URI',
+  'MYSQL_HOST',
+  'MYSQL_USER',
+  'MYSQL_DATABASE',
   'JWT_SECRET',
   'REFRESH_TOKEN_SECRET',
   'CLIENT_URL',
@@ -19,11 +22,11 @@ const requiredEnv = [
 ];
 
 const optionalEnv = [
-  'RECAPTCHA_SECRET_KEY',
   'GOOGLE_CLIENT_ID',
   'GOOGLE_CLIENT_SECRET',
   'BREVO_API_KEY',
-  'REDIS_URL'
+  'RAZORPAY_KEY_ID',
+  'SHIPROCKET_EMAIL'
 ];
 
 function validateStartup() {
@@ -31,7 +34,7 @@ function validateStartup() {
 
   // 1. Validate Required Environment Variables
   requiredEnv.forEach(key => {
-    if (!process.env[key]) {
+    if (!env[key]) {
       missingRequired.push(key);
     }
   });
@@ -62,7 +65,7 @@ function showOptionalWarnings() {
   const missingOptional = [];
 
   optionalEnv.forEach(key => {
-    if (!process.env[key]) {
+    if (!env[key]) {
       missingOptional.push(key);
     }
   });

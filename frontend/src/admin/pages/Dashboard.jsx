@@ -1,93 +1,108 @@
-import { createElement, useEffect } from "react";
+import { createElement, useEffect, lazy, Suspense, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api/client";
 import { useQuery } from "@tanstack/react-query";
 import APIStateWrapper from "../../components/common/APIStateWrapper";
-import {
-  DollarSign, ShoppingBag, Users as UsersIcon,
-  RefreshCw, TrendingUp, BarChart3, Info, Lock, CheckCircle
-} from "lucide-react";
+import { DollarSign, ShoppingBag, Users as UsersIcon, RefreshCw, Info } from "lucide-react";
 import Button from "../../components/ui/Button";
 import { motion } from "framer-motion";
-import { RevenueLineChart, OrdersBarChart } from "../components/AnalyticsCharts";
-import { useRealtime } from "../../hooks/useRealtime";
 import { useAuthStore } from "../../store";
-import toast from "react-hot-toast";
+
+const RevenueLineChart = lazy(() =>
+  import("../components/AnalyticsCharts").then((m) => ({ default: m.RevenueLineChart }))
+);
+
+const OrdersBarChart = lazy(() =>
+  import("../components/AnalyticsCharts").then((m) => ({ default: m.OrdersBarChart }))
+);
+
+const safeNumber = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const safeArray = (value) => (Array.isArray(value) ? value : []);
+
+const normalizeDashboardData = (raw) => {
+  const data = raw?.data || raw || {};
+  const metrics = data.metrics || {};
+
+  return {
+    ...data,
+    revenue: safeNumber(data.revenue ?? metrics.revenue),
+    orders: safeNumber(data.orders ?? metrics.orders),
+    customers: safeNumber(data.customers ?? metrics.customers),
+    revenueTrend: safeArray(data.revenueTrend),
+    ordersTrend: safeArray(data.ordersTrend),
+    recentTransactions: safeArray(data.recentTransactions),
+  };
+};
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const { isAdminAuthenticated } = useAuthStore();
-  const { socket } = useRealtime(true);
+  const [syncTimeout, setSyncTimeout] = useState(false);
 
-  // 🛡️ SECURITY LOCK
   useEffect(() => {
     if (!isAdminAuthenticated) {
-      navigate("/admin/login");
+      navigate("/admin/login", { replace: true });
     }
   }, [isAdminAuthenticated, navigate]);
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
-    queryKey: ['admin-stats'],
+    queryKey: ["admin-dashboard"],
+    enabled: Boolean(isAdminAuthenticated),
     queryFn: async () => {
-      console.log("[DASHBOARD] Fetching stats...");
-      const res = await api.get("/admin/stats");
-      
-      // 🛡️ MAPPING FIX: Extract data from backend envelope
-      const d = res?.data?.data || res?.data || {};
-      console.log("Dashboard API Response:", d);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-      return {
-        metrics: {
-          revenue: d.totalRevenue || 0,
-          orders: d.totalOrders || 0,
-          customers: d.totalUsers || 0,
-        },
-        revenueTrend: Array.isArray(d.revenueTrend) ? d.revenueTrend : [],
-        ordersTrend: Array.isArray(d.ordersTrend) ? d.ordersTrend : [],
-        recentTransactions: Array.isArray(d.recentTransactions) ? d.recentTransactions : [],
-      };
+      try {
+        const res = await api.get("/admin/dashboard", { signal: controller.signal });
+        return normalizeDashboardData(res?.data);
+      } finally {
+        clearTimeout(timeoutId);
+      }
     },
-    refetchInterval: 60000,
-    retry: 2,
-    staleTime: 30000,
+    staleTime: 60000,
+    gcTime: 300000,
+    refetchOnWindowFocus: false,
+    refetchOnMount: true,
+    retry: 1,
   });
 
-  // ✅ SOCKET FIX
   useEffect(() => {
-    if (!socket) return;
+    let timer;
 
-    const handleUpdate = (payload) => {
+    if (isFetching) {
+      setSyncTimeout(false);
+      timer = setTimeout(() => {
+        setSyncTimeout(true);
+      }, 3000);
+    } else {
+      setSyncTimeout(false);
+    }
+
+    return () => clearTimeout(timer);
+  }, [isFetching]);
+
+  useEffect(() => {
+    if (!isAdminAuthenticated) return;
+
+    const interval = setInterval(() => {
       refetch();
+    }, 60000);
 
-      if (payload?.id) {
-        toast.success(`Order #${payload.id.slice(-6)} updated`, {
-          id: `order-${payload.id}`,
-        });
-      }
-    };
-
-    socket.off("orderUpdated");
-    socket.off("userRegistered");
-
-    socket.on("orderUpdated", handleUpdate);
-    socket.on("userRegistered", handleUpdate);
-
-    return () => {
-      socket.off("orderUpdated", handleUpdate);
-      socket.off("userRegistered", handleUpdate);
-    };
-  }, [socket, refetch]);
+    return () => clearInterval(interval);
+  }, [isAdminAuthenticated, refetch]);
 
   const StatCard = ({ title, value, icon: Icon, color }) => (
-    <motion.div className="bg-white rounded-xl border p-4 flex items-center gap-3">
+    <motion.div className="admin-card p-4 flex items-center gap-3">
       <div className={`w-9 h-9 rounded-lg ${color} flex items-center justify-center`}>
         {createElement(Icon, { size: 18, className: "text-white" })}
       </div>
       <div>
         <p className="text-[9px] font-bold text-slate-400 uppercase">{title}</p>
-        <h3 className="text-lg font-black text-slate-900">
-          {typeof value === "number" ? value.toLocaleString() : value}
-        </h3>
+        <h3 className="text-lg font-black text-slate-900">{value}</h3>
       </div>
     </motion.div>
   );
@@ -107,18 +122,18 @@ export default function Dashboard() {
     </div>
   );
 
+  const recentTransactions = safeArray(data?.recentTransactions);
+
   return (
-    <div className="space-y-6 max-w-7xl mx-auto p-4 md:p-8 min-h-screen">
-      
-      {/* 🚀 PREMIUM HEADER */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-6">
+    <div className="admin-shell min-h-screen">
+      <div className="admin-card p-4 md:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">Analytics Overview</h1>
-          <p className="text-xs text-slate-500 font-medium mt-1">Real-time performance monitoring and metrics</p>
+          <h1 className="admin-heading">Analytics Overview</h1>
+          <p className="page-subtitle mt-1">Real-time performance monitoring and metrics</p>
         </div>
 
-        <Button 
-          onClick={refetch} 
+        <Button
+          onClick={() => refetch()}
           disabled={isFetching}
           className="bg-black hover:bg-slate-800 text-white shadow-xl shadow-slate-200 transition-all duration-300 active:scale-95"
         >
@@ -129,44 +144,58 @@ export default function Dashboard() {
         </Button>
       </div>
 
-      <APIStateWrapper 
-        isLoading={isLoading} 
-        isError={isError} 
-        error={error} 
-        onRetry={refetch}
+      {syncTimeout && (
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: "auto" }}
+          className="bg-amber-50 border border-amber-200 p-3 rounded-xl flex items-center gap-3 text-amber-700"
+        >
+          <Info size={16} />
+          <p className="text-[10px] font-bold uppercase tracking-widest">
+            Slow connection detected. Fetching in progress...
+          </p>
+        </motion.div>
+      )}
+
+      <APIStateWrapper
+        isLoading={isLoading}
+        isError={isError}
+        error={error}
+        onRetry={() => refetch()}
         loadingFallback={<DashboardSkeleton />}
       >
         {data && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, ease: "easeOut" }}
-            className="space-y-8"
+            className="space-y-6"
           >
-            {/* METRICS */}
-            <div className="grid md:grid-cols-3 gap-6">
-              <StatCard title="Revenue" value={`₹${data.metrics.revenue.toLocaleString()}`} icon={DollarSign} color="bg-indigo-600" />
-              <StatCard title="Orders" value={data.metrics.orders} icon={ShoppingBag} color="bg-slate-900" />
-              <StatCard title="Customers" value={data.metrics.customers} icon={UsersIcon} color="bg-emerald-600" />
+            <div className="grid md:grid-cols-3 gap-4">
+              <StatCard title="Revenue" value={`₹${safeNumber(data.revenue).toLocaleString("en-IN")}`} icon={DollarSign} color="bg-indigo-600" />
+              <StatCard title="Orders" value={safeNumber(data.orders).toLocaleString("en-IN")} icon={ShoppingBag} color="bg-slate-900" />
+              <StatCard title="Customers" value={safeNumber(data.customers).toLocaleString("en-IN")} icon={UsersIcon} color="bg-emerald-600" />
             </div>
 
-            {/* CHARTS */}
-            <div className="grid lg:grid-cols-2 gap-8">
-              <div className="bg-white/50 backdrop-blur-sm p-1 rounded-2xl border border-white shadow-sm">
-                <RevenueLineChart data={data.revenueTrend} />
+            <div className="grid lg:grid-cols-2 gap-5">
+              <div className="admin-card p-1">
+                <Suspense fallback={<div className="h-80 bg-slate-50 animate-pulse rounded-xl" />}>
+                  <RevenueLineChart data={data.revenueTrend} />
+                </Suspense>
               </div>
-              <div className="bg-white/50 backdrop-blur-sm p-1 rounded-2xl border border-white shadow-sm">
-                <OrdersBarChart data={data.ordersTrend} />
+              <div className="admin-card p-1">
+                <Suspense fallback={<div className="h-80 bg-slate-50 animate-pulse rounded-xl" />}>
+                  <OrdersBarChart data={data.ordersTrend} />
+                </Suspense>
               </div>
             </div>
 
-            {/* TABLE */}
-            <div className="bg-white rounded-2xl shadow-xl shadow-slate-100 border border-slate-100 overflow-hidden">
-              <div className="p-5 border-b border-slate-50 flex items-center gap-2">
+            <div className="admin-card overflow-hidden">
+              <div className="p-4 border-b border-slate-50 flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 <h2 className="text-sm font-black text-slate-800 uppercase tracking-widest">Recent Transactions</h2>
               </div>
-              
+
               <div className="overflow-x-auto">
                 <table className="w-full text-left">
                   <thead className="bg-slate-50/50">
@@ -180,12 +209,13 @@ export default function Dashboard() {
                   </thead>
 
                   <tbody className="divide-y divide-slate-50">
-                    {data.recentTransactions.length > 0 ? (
-                      data.recentTransactions.map((tx, idx) => {
-                        const id = tx.id || tx._id;
+                    {recentTransactions.length > 0 ? (
+                      recentTransactions.map((tx, idx) => {
+                        const id = tx?.id || tx?._id || `TX-${idx + 1}`;
+                        const status = tx?.status || "PENDING";
 
                         return (
-                          <motion.tr 
+                          <motion.tr
                             key={id}
                             initial={{ opacity: 0, x: -10 }}
                             animate={{ opacity: 1, x: 0 }}
@@ -193,24 +223,34 @@ export default function Dashboard() {
                             className="hover:bg-slate-50/80 transition-colors"
                           >
                             <td className="px-6 py-4">
-                              <span className="font-mono text-xs font-bold text-slate-400">#{String(id).slice(-6).toUpperCase()}</span>
+                              <span className="font-mono text-xs font-bold text-slate-400">
+                                #{String(id).slice(-6).toUpperCase()}
+                              </span>
                             </td>
-                            <td className="px-6 py-4 font-bold text-slate-700 text-sm">{tx.customer || "N/A"}</td>
+                            <td className="px-6 py-4 font-bold text-slate-700 text-sm">{tx?.customer || "N/A"}</td>
                             <td className="px-6 py-4 text-xs text-slate-500 font-medium">
-                              {tx.createdAt ? new Date(tx.createdAt).toLocaleDateString(undefined, {
-                                month: 'short',
-                                day: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit'
-                              }) : "—"}
+                              {tx?.createdAt
+                                ? new Date(tx.createdAt).toLocaleDateString(undefined, {
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })
+                                : "-"}
                             </td>
-                            <td className="px-6 py-4 font-black text-slate-900 text-sm">₹{Number(tx.amount || 0).toLocaleString()}</td>
+                            <td className="px-6 py-4 font-black text-slate-900 text-sm">
+                              ₹{safeNumber(tx?.amount).toLocaleString("en-IN")}
+                            </td>
                             <td className="px-6 py-4">
-                              <span className={`px-2.5 py-1 rounded-full text-[10px] font-black tracking-tighter uppercase
-                                ${tx.status === 'DELIVERED' ? 'bg-emerald-50 text-emerald-600' : 
-                                  tx.status === 'CANCELLED' ? 'bg-rose-50 text-rose-600' : 
-                                  'bg-amber-50 text-amber-600'}`}>
-                                {tx.status || "PENDING"}
+                              <span
+                                className={`px-2.5 py-1 rounded-full text-[10px] font-black tracking-tighter uppercase ${status === "DELIVERED"
+                                    ? "bg-emerald-50 text-emerald-600"
+                                    : status === "CANCELLED"
+                                      ? "bg-rose-50 text-rose-600"
+                                      : "bg-amber-50 text-amber-600"
+                                  }`}
+                              >
+                                {status}
                               </span>
                             </td>
                           </motion.tr>

@@ -3,69 +3,93 @@ const { getExtractionKeys } = require("../utils/ip.util");
 const { fail } = require("../utils/apiResponse");
 const { logger } = require("../utils/logger");
 
-const SHADOW_MODE = false;
-const MAX_KEY_TTL = 120;
+const SHADOW_MODE = String(process.env.RATE_LIMIT_SHADOW_MODE || "false").toLowerCase() === "true";
+const MAX_KEY_TTL = Number(process.env.RATE_LIMIT_MAX_KEY_TTL || 900);
+const localBuckets = new Map();
 
-const INCR_EXPIRE_LUA = `
-local v = redis.call('INCR', KEYS[1])
-if v == 1 then
-  redis.call('EXPIRE', KEYS[1], ARGV[1])
-end
-return v
-`;
+const retryAfter = (windowSec) => Math.max(1, Number(windowSec || 60));
 
-const retryAfter = (windowSec) => {
-  const jitter = Math.floor(Math.random() * 3);
-  return Math.max(1, windowSec + jitter);
+const increment = async (key, ttl) => {
+  if (!redisConfig.isReady?.()) {
+    const now = Date.now();
+    const existing = localBuckets.get(key);
+
+    if (!existing || existing.expiresAt <= now) {
+      localBuckets.set(key, { count: 1, expiresAt: now + ttl * 1000 });
+      return 1;
+    }
+
+    existing.count += 1;
+    return existing.count;
+  }
+
+  const value = await redisConfig.safeCall(async (r) => {
+    const count = await r.incr(key);
+    if (count === 1) await r.expire(key, ttl);
+    return count;
+  });
+
+  return Number(value || 0);
 };
 
-const createLimiter = (options) => {
-  const {
-    windowSec = 60,
-    userLimit = 100,
-    ipLimit = 200,
-    subnetLimit = 500,
-    action = "default",
-  } = options;
+const setHeaders = (res, { limit, count, windowSec }) => {
+  res.setHeader("RateLimit-Limit", String(limit));
+  res.setHeader("RateLimit-Remaining", String(Math.max(0, limit - count)));
+  res.setHeader("RateLimit-Reset", String(retryAfter(windowSec)));
+};
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, bucket] of localBuckets.entries()) {
+    if (!bucket || bucket.expiresAt <= now) localBuckets.delete(key);
+  }
+}, 60000).unref?.();
+
+const createLimiter = ({
+  windowSec = 60,
+  userLimit = 100,
+  ipLimit = 200,
+  subnetLimit = 500,
+  action = "default",
+  skip = null,
+} = {}) => {
+  const ttl = Math.min(Math.max(1, Number(windowSec) * 2), MAX_KEY_TTL);
 
   return async (req, res, next) => {
-    // 🔥 SAFE ACCESS
-    const redis = redisConfig.redis || (redisConfig.rawClient ? redisConfig.rawClient : null);
-    
-    if (!redis || redis.status !== "ready") return next();
+    if (process.env.NODE_ENV === "test") return next();
+    if (skip?.(req) || ["/health", "/metrics"].includes(req.path)) return next();
 
     const { userId, ip, subnet } = getExtractionKeys(req);
-    const now = Math.floor(Date.now() / 1000);
-    const windowKey = Math.floor(now / windowSec);
-    const ttl = Math.min(windowSec * 2, MAX_KEY_TTL);
+    const windowKey = Math.floor(Date.now() / 1000 / Number(windowSec || 60));
 
-    const userKey = userId ? `rl:u:${userId}:${action}:${windowKey}` : null;
-    const ipKey = `rl:i:${ip}:${action}:${windowKey}`;
-    const subnetKey = `rl:s:${subnet}:${action}:${windowKey}`;
+    const keys = [
+      userId ? { type: "user", key: `rl:u:${userId}:${action}:${windowKey}`, limit: userLimit } : null,
+      { type: "ip", key: `rl:i:${ip}:${action}:${windowKey}`, limit: ipLimit },
+      { type: "subnet", key: `rl:s:${subnet}:${action}:${windowKey}`, limit: subnetLimit },
+    ].filter(Boolean);
 
     try {
-      const pipeline = redis.pipeline();
-      if (userKey) pipeline.eval(INCR_EXPIRE_LUA, 1, userKey, ttl);
-      pipeline.eval(INCR_EXPIRE_LUA, 1, ipKey, ttl);
-      pipeline.eval(INCR_EXPIRE_LUA, 1, subnetKey, ttl);
+      const counts = await Promise.all(keys.map((item) => increment(item.key, ttl)));
+      const checks = keys.map((item, index) => ({ ...item, count: counts[index] }));
+      const exceeded = checks.find((item) => item.count > item.limit);
+      const primary = checks[0] || { limit: ipLimit, count: 0 };
 
-      const results = await Promise.race([
-        pipeline.exec(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Redis Timeout")), 1000))
-      ]);
+      setHeaders(res, {
+        limit: primary.limit,
+        count: primary.count,
+        windowSec,
+      });
 
-      let idx = 0;
-      const userCount = userKey ? results[idx++][1] : 0;
-      const ipCount = results[idx++][1];
-      const subnetCount = results[idx++][1];
+      if (exceeded) {
+        logger.warn("[RATE_LIMIT_HIT]", {
+          action,
+          scope: exceeded.type,
+          userId,
+          ip,
+          count: exceeded.count,
+          limit: exceeded.limit,
+        });
 
-      const blocked =
-        (userKey && userCount > userLimit) ||
-        ipCount > ipLimit ||
-        subnetCount > subnetLimit;
-
-      if (blocked) {
-        logger.warn("[RATE_LIMIT_HIT]", { action, userId, ip, userCount, ipCount });
         if (SHADOW_MODE) return next();
 
         const ra = retryAfter(windowSec);
@@ -75,7 +99,7 @@ const createLimiter = (options) => {
 
       return next();
     } catch (err) {
-      logger.error("[RATE_LIMIT_ERROR]", { message: err.message });
+      logger.warn("[RATE_LIMIT_ERROR]", { action, message: err.message });
       return next();
     }
   };
@@ -83,32 +107,49 @@ const createLimiter = (options) => {
 
 const authLimiter = createLimiter({
   windowSec: 300,
-  userLimit: 10,
-  ipLimit: 20,
-  subnetLimit: 50,
+  userLimit: Number(process.env.AUTH_USER_LIMIT || 20),
+  ipLimit: Number(process.env.AUTH_IP_LIMIT || 40),
+  subnetLimit: Number(process.env.AUTH_SUBNET_LIMIT || 120),
   action: "auth",
 });
 
 const apiLimiter = createLimiter({
   windowSec: 60,
-  userLimit: 100,
-  ipLimit: 200,
-  subnetLimit: 500,
+  userLimit: Number(process.env.API_USER_LIMIT || 400),
+  ipLimit: Number(process.env.API_IP_LIMIT || 800),
+  subnetLimit: Number(process.env.API_SUBNET_LIMIT || 2400),
   action: "api",
 });
 
 const dashboardLimiter = createLimiter({
   windowSec: 60,
-  userLimit: 300,
-  ipLimit: 500,
-  subnetLimit: 1000,
+  userLimit: Number(process.env.DASHBOARD_USER_LIMIT || 600),
+  ipLimit: Number(process.env.DASHBOARD_IP_LIMIT || 1200),
+  subnetLimit: Number(process.env.DASHBOARD_SUBNET_LIMIT || 3000),
   action: "dashboard",
+});
+
+const uploadLimiter = createLimiter({
+  windowSec: 300,
+  userLimit: Number(process.env.UPLOAD_USER_LIMIT || 80),
+  ipLimit: Number(process.env.UPLOAD_IP_LIMIT || 120),
+  subnetLimit: Number(process.env.UPLOAD_SUBNET_LIMIT || 300),
+  action: "upload",
+});
+
+const healthLimiter = createLimiter({
+  windowSec: 60,
+  userLimit: 1000,
+  ipLimit: 2000,
+  subnetLimit: 5000,
+  action: "health",
 });
 
 module.exports = {
   authLimiter,
   apiLimiter,
   dashboardLimiter,
-  uploadLimiter: (req, res, next) => next(),
-  healthLimiter: (req, res, next) => next(),
+  uploadLimiter,
+  healthLimiter,
+  createLimiter,
 };

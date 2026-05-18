@@ -6,58 +6,87 @@ import {
   Mail,
   FileText,
   MapPin,
-  Save
+  Save,
 } from "lucide-react";
 import Button from "../../components/ui/Button";
 import toast from "react-hot-toast";
 
+const initialFormData = {
+  company_name: "",
+  phone: "",
+  email: "",
+  gst: "",
+  address: "",
+};
+
+const normalizeConfig = (config) => ({
+  company_name: config?.company_name || "",
+  phone: config?.phone || "",
+  email: config?.email || "",
+  gst: config?.gst || "",
+  address: config?.address || "",
+});
+
+const isValidEmail = (email) => {
+  if (!email) return true;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+};
+
+const cleanPhone = (phone) => {
+  return String(phone || "").replace(/[^\d+]/g, "");
+};
+
+const fieldClass =
+  "w-full h-12 rounded-xl border border-slate-200 bg-slate-50/70 px-4 text-sm font-semibold text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-slate-900 focus:bg-white focus:ring-4 focus:ring-slate-900/5";
+
+const textareaClass =
+  "w-full min-h-32 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-sm font-semibold text-slate-900 outline-none transition-all resize-none placeholder:text-slate-400 focus:border-slate-900 focus:bg-white focus:ring-4 focus:ring-slate-900/5";
+
+const FieldLabel = ({ icon: Icon, children }) => (
+  <label className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-[0.18em]">
+    <Icon size={13} className="text-slate-500" />
+    {children}
+  </label>
+);
+
 export default function Settings() {
   const { config, fetchConfig, updateConfig } = useConfigStore();
   const [loading, setLoading] = useState(false);
+  const [formData, setFormData] = useState(initialFormData);
 
-  const [formData, setFormData] = useState({
-    company_name: "",
-    phone: "",
-    email: "",
-    gst: "",
-    address: "",
-  });
-
-  // ✅ STABLE FETCH
-  const loadConfig = useCallback(() => {
-    fetchConfig();
+  const loadConfig = useCallback(async () => {
+    try {
+      await fetchConfig();
+    } catch (err) {
+      console.error("CONFIG_FETCH_ERROR:", err?.response?.data || err?.message);
+      toast.error("Failed to load settings");
+    }
   }, [fetchConfig]);
 
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
 
-  // ✅ SAFE SET FORM
   useEffect(() => {
-    if (!config) return;
-
-    setFormData({
-      company_name: config.company_name || "",
-      phone: config.phone || "",
-      email: config.email || "",
-      gst: config.gst || "",
-      address: config.address || "",
-    });
+    setFormData(normalizeConfig(config));
   }, [config]);
 
-  // ✅ VALIDATION
   const validate = () => {
-    if (!formData.company_name.trim()) {
+    const companyName = formData.company_name.trim();
+    const email = formData.email.trim();
+    const phone = cleanPhone(formData.phone);
+
+    if (!companyName) {
       toast.error("Company name required");
       return false;
     }
 
-    if (formData.email && !/\S+@\S+\.\S+/.test(formData.email)) {
+    if (!isValidEmail(email)) {
       toast.error("Invalid email");
       return false;
     }
 
-    if (formData.phone && formData.phone.length < 8) {
+    if (phone && phone.replace(/\D/g, "").length < 8) {
       toast.error("Invalid phone number");
       return false;
     }
@@ -65,27 +94,26 @@ export default function Settings() {
     return true;
   };
 
-  // ✅ SAFE SUBMIT
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!validate()) return;
 
-    setLoading(true);
+    if (loading || !validate()) return;
 
     const payload = {
       company_name: formData.company_name.trim(),
       phone: formData.phone.trim(),
-      email: formData.email.trim(),
-      gst: formData.gst.trim(),
+      email: formData.email.trim().toLowerCase(),
+      gst: formData.gst.trim().toUpperCase(),
       address: formData.address.trim(),
     };
 
     try {
+      setLoading(true);
       await updateConfig(payload);
       toast.success("Settings saved successfully");
     } catch (err) {
-      console.error("CONFIG UPDATE ERROR:", err?.response?.data || err?.message);
-      toast.error("Failed to save settings");
+      console.error("CONFIG_UPDATE_ERROR:", err?.response?.data || err?.message);
+      toast.error(err?.response?.data?.message || "Failed to save settings");
     } finally {
       setLoading(false);
     }
@@ -96,102 +124,108 @@ export default function Settings() {
   };
 
   return (
-    <div className="space-y-10">
+    <div className="min-h-[calc(100vh-84px)] bg-slate-50/60 px-6 py-8 lg:px-10">
+      <div className="max-w-5xl space-y-8">
+        <div className="border-b border-slate-200 pb-7">
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.28em]">
+            Administration
+          </p>
+          <h1 className="mt-3 text-3xl md:text-4xl font-black text-slate-950 tracking-tighter uppercase leading-none">
+            Brand Identity
+          </h1>
+          <p className="mt-3 max-w-2xl text-sm font-medium text-slate-500">
+            Manage the company details used across invoices, storefront branding, and customer communication.
+          </p>
+        </div>
 
-      {/* HEADER */}
-      <div className="border-b border-[#F2F2F2] pb-6">
-        <h1 className="text-3xl font-black text-[#0f172a] tracking-tighter uppercase leading-none">
-          Brand identity settings
-        </h1>
-        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-3">
-          Manage global branding assets and corporate identifiers.
-        </p>
-      </div>
-
-      <div className="max-w-3xl">
         <form
           onSubmit={handleSubmit}
-          className="bg-white p-8 rounded-2xl border border-[#F2F2F2] shadow-sm space-y-8"
+          className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
         >
-          <h3 className="text-sm font-black text-[#0f172a] uppercase tracking-widest border-b border-[#F2F2F2] pb-4">
-            Corporate registry
-          </h3>
+          <div className="flex flex-col gap-4 border-b border-slate-100 px-6 py-5 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-base font-black text-slate-950 uppercase tracking-widest">
+                Corporate Registry
+              </h2>
+              <p className="mt-1 text-xs font-medium text-slate-500">
+                Keep these fields accurate for legal and support surfaces.
+              </p>
+            </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Button
+              type="submit"
+              disabled={loading}
+              loading={loading}
+              className="h-11 rounded-xl px-5 font-black uppercase tracking-wider"
+            >
+              <Save size={16} />
+              Save Changes
+            </Button>
+          </div>
 
-            {/* COMPANY */}
+          <div className="grid grid-cols-1 gap-6 p-6 md:grid-cols-2">
             <div className="space-y-2">
-              <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 flex items-center gap-2">
-                <Building2 size={12} /> Company name
-              </label>
+              <FieldLabel icon={Building2}>Company name</FieldLabel>
               <input
                 value={formData.company_name}
                 onChange={(e) => updateField("company_name", e.target.value)}
                 placeholder="e.g. Doller Coach"
-                className="input-style"
+                className={fieldClass}
               />
             </div>
 
-            {/* GST */}
             <div className="space-y-2">
-              <label className="label">
-                <FileText size={12} /> GSTIN Number
-              </label>
+              <FieldLabel icon={FileText}>GSTIN Number</FieldLabel>
               <input
                 value={formData.gst}
                 onChange={(e) => updateField("gst", e.target.value)}
                 placeholder="e.g. 09ABCDE1234F1Z5"
-                className="input-style"
+                className={fieldClass}
               />
             </div>
 
-            {/* PHONE */}
             <div className="space-y-2">
-              <label className="label">
-                <Phone size={12} /> Phone
-              </label>
+              <FieldLabel icon={Phone}>Phone</FieldLabel>
               <input
                 value={formData.phone}
                 onChange={(e) => updateField("phone", e.target.value)}
                 placeholder="+91 9876543210"
-                className="input-style"
+                className={fieldClass}
               />
             </div>
 
-            {/* EMAIL */}
             <div className="space-y-2">
-              <label className="label">
-                <Mail size={12} /> Email
-              </label>
+              <FieldLabel icon={Mail}>Email</FieldLabel>
               <input
                 value={formData.email}
                 onChange={(e) => updateField("email", e.target.value)}
                 placeholder="brand@email.com"
-                className="input-style"
+                className={fieldClass}
               />
             </div>
-          </div>
 
-          {/* ADDRESS */}
-          <div className="space-y-2">
-            <label className="label">
-              <MapPin size={12} /> Address
-            </label>
-            <textarea
-              value={formData.address}
-              onChange={(e) => updateField("address", e.target.value)}
-              rows={3}
-              className="textarea-style"
-              placeholder="Street, City, Zip, Country"
-            />
-          </div>
+            <div className="space-y-2 md:col-span-2">
+              <FieldLabel icon={MapPin}>Address</FieldLabel>
+              <textarea
+                value={formData.address}
+                onChange={(e) => updateField("address", e.target.value)}
+                rows={4}
+                className={textareaClass}
+                placeholder="Street, City, Zip, Country"
+              />
+            </div>
 
-          {/* SUBMIT */}
-          <div className="flex justify-end pt-4">
-            <Button type="submit" disabled={loading}>
-              <Save size={16} />
-              {loading ? "Saving..." : "Save Changes"}
-            </Button>
+            <div className="flex justify-end border-t border-slate-100 pt-6 md:col-span-2">
+              <Button
+                type="submit"
+                disabled={loading}
+                loading={loading}
+                className="h-12 min-w-40 rounded-xl font-black uppercase tracking-wider"
+              >
+                <Save size={16} />
+                Save Changes
+              </Button>
+            </div>
           </div>
         </form>
       </div>

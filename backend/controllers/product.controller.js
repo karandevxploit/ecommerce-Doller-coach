@@ -2,13 +2,15 @@ const asyncHandler = require("express-async-handler");
 const { ok, fail } = require("../utils/apiResponse");
 
 const Product = require("../models/product.model");
+const Category = require("../models/category.model");
+const User = require("../models/user.model");
 const productRepository = require("../repositories/product.repository");
 
 const { notifyAdmins } = require("../services/notification.service");
-const { sendNewProductEmail } = require("../utils/sendEmail");
-
+const { sendNewProductAnnouncementEmail, sendNewProductEmail } = require("../utils/sendEmail");
 const { logger } = require("../utils/logger");
 const cache = require("../services/cache.service");
+const { safeCall } = require("../config/redis");
 
 // ===============================
 // SAFE HELPERS
@@ -19,86 +21,341 @@ const safeParseInt = (val, fallback, min = 1, max = 20) => {
   return Math.min(n, max);
 };
 
+const clean = (value = "") => String(value ?? "").trim();
+const toBool = (value) => value === true || value === "true" || value === 1 || value === "1";
+const isObjectId = (value) => /^[0-9a-fA-F]{24}$/.test(String(value || ""));
+const splitList = (value) => {
+  if (Array.isArray(value)) return value.map(clean).filter(Boolean);
+  if (value === undefined || value === null || value === "") return [];
+  return String(value).split(",").map(clean).filter(Boolean);
+};
+const DEFAULT_PRODUCT_IMAGE = "/uploads/products/default-product.webp";
+
+const makeSlug = (name = "") =>
+  clean(name)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const makeUniqueSlug = async (name = "", excludeId = null) => {
+  const baseSlug = makeSlug(name) || `product-${Date.now()}`;
+  const query = (slug) => {
+    const condition = { slug };
+    if (excludeId && isObjectId(excludeId)) condition._id = { $ne: excludeId };
+    return condition;
+  };
+
+  const existing = await Product.findOne(query(baseSlug)).select("_id").lean();
+  if (!existing) return baseSlug;
+
+  for (let suffix = 2; suffix <= 1000; suffix += 1) {
+    const nextSlug = `${baseSlug}-${suffix}`;
+    const duplicate = await Product.findOne(query(nextSlug)).select("_id").lean();
+    if (!duplicate) return nextSlug;
+  }
+
+  return `${baseSlug}-${Date.now()}`;
+};
+
 const escapeRegex = (input) =>
   String(input).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const isUsableImage = (value) => {
+  const image = clean(value);
+  return Boolean(
+    image &&
+    (
+      image.startsWith("http://") ||
+      image.startsWith("https://") ||
+      image.startsWith("data:image/") ||
+      image.startsWith("blob:") ||
+      image.startsWith("/uploads/") ||
+      image.startsWith("uploads/")
+    )
+  );
+};
+
+const stripLocalUploadHost = (value) => {
+  const image = clean(value);
+  if (!image) return "";
+
+  try {
+    const parsed = new URL(image);
+    const isLocalHost =
+      parsed.hostname === "localhost" ||
+      parsed.hostname === "127.0.0.1" ||
+      parsed.hostname === "::1";
+
+    if (isLocalHost && parsed.pathname.startsWith("/uploads/")) {
+      return `${parsed.pathname}${parsed.search || ""}`;
+    }
+  } catch {
+    // Keep non-absolute upload paths as they are.
+  }
+
+  return image;
+};
+
+const normalizePersistedImages = (value) => splitList(value).filter(isUsableImage);
+
+const collectProductImages = (product = {}) => {
+  const images = [
+    product.primaryImage,
+    product.image,
+    ...(Array.isArray(product.images) ? product.images : []),
+    ...(Array.isArray(product.variants)
+      ? product.variants.flatMap((variant) =>
+        Array.isArray(variant?.images) ? variant.images : []
+      )
+      : []),
+  ].map(stripLocalUploadHost).filter(isUsableImage);
+
+  const uniqueImages = [...new Set(images)];
+  return uniqueImages.length ? uniqueImages : [DEFAULT_PRODUCT_IMAGE];
+};
+
+const serializeProduct = (product = {}) => {
+  const images = collectProductImages(product);
+
+  return {
+    ...product,
+    id: String(product._id || product.id || ""),
+    title: product.title || product.name || "",
+    images,
+    primaryImage: images[0] || "",
+    image: images[0] || "",
+    stock: Number(product.stock) || 0,
+  };
+};
+
+const invalidateProductCaches = async () => {
+  await Promise.allSettled([
+    cache.del("offers:active"),
+    safeCall(async (r) => {
+      let cursor = "0";
+      do {
+        const [next, keys] = await r.scan(cursor, "MATCH", "products*", "COUNT", 200);
+        cursor = next;
+        if (keys.length) await r.del(...keys);
+      } while (cursor !== "0");
+    }),
+    safeCall(async (r) => {
+      let cursor = "0";
+      do {
+        const [next, keys] = await r.scan(cursor, "MATCH", "filters:*", "COUNT", 200);
+        cursor = next;
+        if (keys.length) await r.del(...keys);
+      } while (cursor !== "0");
+    }),
+    safeCall(async (r) => {
+      let cursor = "0";
+      do {
+        const [next, keys] = await r.scan(cursor, "MATCH", "cache:*:GET:/api/products*:*", "COUNT", 200);
+        cursor = next;
+        if (keys.length) await r.del(...keys);
+      } while (cursor !== "0");
+    }),
+  ]);
+};
+
+const notifyUsersAboutNewProduct = async (product) => {
+  const productData = product?.toObject ? product.toObject() : product;
+  const productStatus = String(productData?.status || "").toLowerCase();
+
+  if (productStatus !== "active") {
+    logger.info("[NEW_PRODUCT_EMAIL_SKIPPED]", {
+      productId: String(productData?._id || ""),
+      reason: "product_not_active",
+    });
+    return;
+  }
+
+  const users = await User.find({
+    role: "user",
+    isDeleted: { $ne: true },
+    email: { $exists: true, $ne: "" },
+  })
+    .select("email")
+    .lean();
+
+  const emails = [...new Set(users.map((user) => String(user.email || "").trim().toLowerCase()).filter(Boolean))];
+  const batchSize = 80;
+
+  for (let index = 0; index < emails.length; index += batchSize) {
+    const batch = emails.slice(index, index + batchSize);
+    await sendNewProductAnnouncementEmail({
+      product: productData,
+      recipients: batch,
+    });
+  }
+
+  logger.info("[NEW_PRODUCT_EMAIL_SENT]", {
+    productId: String(productData?._id || ""),
+    recipients: emails.length,
+  });
+};
 
 // ===============================
 // LIST PRODUCTS (HIGH SCALE)
 // ===============================
 exports.listProducts = asyncHandler(async (req, res) => {
-  const {
-    category,
-    subcategory,
-    productType,
-    type,
-    sizes,
-    q,
-    featured,
-    trending,
-    limit,
-    page,
-  } = req.query;
+  try {
+    // 1. SANITIZE QUERY PARAMETERS
+    const {
+      category,
+      gender,
+      color,
+      colors,
+      size,
+      sizes,
+      minPrice,
+      maxPrice,
+      rating,
+      availability,
+      sort = "newest",
+      q,
+      page = 1,
+      limit = 20
+    } = req.query;
 
-  // 1. STRICT LIMIT (Compliance: Max 20)
-  const limitNum = safeParseInt(limit, 20, 1, 20); // Default 20
-  const pageNum = safeParseInt(page, 1, 1, 1000);
+    const pageNum = safeParseInt(page, 1, 1, 100000);
+    const limitNum = safeParseInt(limit, 20, 1, 60);
+    const activeColor = color || colors;
+    const activeSize = size || sizes;
 
-  const cacheKey = `products:${JSON.stringify(req.query)}`;
+    // 2. FIX CACHE KEY (REMOVE undefined)
+    const cacheKey = `products_v7:cat:${category || "all"}:gen:${gender || "all"}:col:${activeColor || "all"}:siz:${activeSize || "all"}:pr:${minPrice || 0}-${maxPrice || "max"}:rt:${rating || 0}:av:${availability || "all"}:sort:${sort}:q:${q || ""}:p:${pageNum}:l:${limitNum}`;
 
-  // 2. HYBRID CACHE (DEDUPLICATED)
-  if (!q) {
     return cache.getOrSet(cacheKey, async () => {
-      // FILTER
-      const filter = { isDeleted: { $ne: true } };
+      // 3. BUILD QUERY DYNAMICALLY
+      const query = { 
+        isDeleted: { $ne: true }, 
+        status: "active"
+      };
 
-      if (category && category !== "All") filter.category = category.toUpperCase();
-      if (subcategory && subcategory !== "All") filter.subcategory = subcategory;
-      if (productType && productType !== "All") filter.productType = productType;
-      if (type && type !== "All") filter.type = type.toUpperCase();
-      if (featured === "true") filter.featured = true;
-      if (trending === "true") filter.trending = true;
+      // Handle Categories (Single or Multi)
+      if (category) {
+        const catArr = Array.isArray(category) ? category : category.split(",");
+        const validIds = catArr.filter(id => /^[0-9a-fA-F]{24}$/.test(id));
+        if (validIds.length > 0) {
+          query.category = validIds.length === 1 ? validIds[0] : { $in: validIds };
+        } else {
+          const categoryText = String(category).trim().toLowerCase();
+          if (["men", "women"].includes(categoryText)) {
+            query.gender = categoryText;
+          } else if (!["all", "none", "collection"].includes(categoryText)) {
+            const matchingCategories = await Category.find({
+              isActive: true,
+              $or: [
+                { name: new RegExp(`^${escapeRegex(categoryText)}$`, "i") },
+                { slug: categoryText },
+              ],
+            }).select("_id").lean();
 
-      if (sizes) {
-        const arr = sizes.split(",").map((s) => s.trim());
-        if (arr.length) filter.sizes = { $in: arr };
+            if (matchingCategories.length) {
+              query.category = { $in: matchingCategories.map((cat) => cat._id) };
+            } else {
+              query._id = { $exists: false };
+            }
+          }
+        }
+      }
+      if (gender && !["All", "all", "collection"].includes(gender)) {
+        const genderText = String(gender).toLowerCase();
+
+        if (!category) {
+          const genderCategories = await Category.find({
+            gender: genderText,
+            isActive: true,
+          }).select("_id").lean();
+          const genderCategoryIds = genderCategories.map((cat) => String(cat._id || cat.id)).filter(Boolean);
+
+          query.$or = [
+            { gender: genderText },
+            { gender: { $exists: false } },
+            { gender: "" },
+            ...(genderCategoryIds.length ? [{ category: { $in: genderCategoryIds } }] : []),
+          ];
+        } else {
+          query.$or = [
+            { gender: genderText },
+            { gender: { $exists: false } },
+            { gender: "" },
+          ];
+        }
       }
 
-      const selectFields = "name price images stock category brand createdAt status isTrending featured";
+      // Handle Multi-Select (Color)
+      if (activeColor) {
+        const colorArr = Array.isArray(activeColor) ? activeColor : activeColor.split(",");
+        query.colors = { $in: colorArr.filter(Boolean) };
+      }
 
-      // 3. PARALLEL OPTIMIZATION (No countDocuments for speed/memory)
+      // Handle Multi-Select (Size)
+      if (activeSize) {
+        const sizeArr = Array.isArray(activeSize) ? activeSize : activeSize.split(",");
+        query.sizes = { $in: sizeArr.filter(Boolean) };
+      }
+
+      if (minPrice || maxPrice) {
+        query.price = {};
+        if (minPrice) query.price.$gte = Number(minPrice);
+        if (maxPrice) query.price.$lte = Number(maxPrice);
+      }
+
+      if (rating) {
+        query.rating = { $gte: Number(rating) };
+      }
+
+      if (availability === "in_stock") {
+        query.stock = { $gt: 0 };
+      } else if (availability === "out_of_stock") {
+        query.stock = { $lte: 0 };
+      }
+
+      if (q && String(q).trim()) {
+        const searchRegex = new RegExp(escapeRegex(String(q).trim()), "i");
+        query.$or = [
+          { name: searchRegex },
+          { description: searchRegex },
+          { tags: searchRegex },
+        ];
+      }
+
+      let sortQuery = { createdAt: -1 };
+      if (sort === "price-asc") sortQuery = { price: 1, createdAt: -1 };
+      else if (sort === "price-desc") sortQuery = { price: -1, createdAt: -1 };
+      else if (sort === "popular") sortQuery = { salesCount: -1, rating: -1, createdAt: -1 };
+      else if (sort === "trending") sortQuery = { isTrending: -1, createdAt: -1 };
+
+      // 4. SAFE QUERY EXECUTION
       const [data, total] = await Promise.all([
-        Product.find(filter)
-          .select(selectFields)
-          .sort({ createdAt: -1 })
+        Product.find(query)
+          .select("name title price originalPrice images primaryImage hoverImage variants category colors sizes gender stock status createdAt offer video rating ratings salesCount")
+          .sort(sortQuery)
           .skip((pageNum - 1) * limitNum)
           .limit(limitNum)
-          .lean()
-          .maxTimeMS(3000),
-        Product.estimatedDocumentCount().maxTimeMS(1000) // Fast approximation
+          .populate("category", "name")
+          .lean(),
+        Product.countDocuments(query)
       ]);
 
-      const result = data.map((p) => ({
-        ...p,
-        id: p._id,
-        title: p.name,
-        image: (Array.isArray(p.images) && p.images[0]) || p.image || "/placeholder.png",
-        _id: undefined,
-      }));
+      const result = data.map(serializeProduct);
 
-      return { result, total };
-    }, 120).then(({ result, total }) => {
-      res.status(200).json({
-        success: true,
-        products: result,
-        total,
-        page: Number(pageNum),
-        limit: Number(limitNum),
-        totalPages: Math.ceil(total / limitNum)
-      });
-    }).catch(err => {
-      logger.error("[PRODUCT_LIST_ERROR]", err);
-      return ok(res, [], "Fallback", 200, { total: 0, page: 1, limit: 20, totalPages: 0 });
+      return { 
+        products: result, 
+        total, 
+        page: pageNum, 
+        limit: limitNum, 
+        totalPages: Math.ceil(total / limitNum) 
+      };
+    }, 60).then((payload) => {
+      return ok(res, payload, "Products fetched");
     });
+  } catch (error) {
+    // 5. IMPROVE ERROR LOGGING
+    logger.error("[PRODUCT_LIST_ERROR]", { message: error.message });
+    return fail(res, "Failed to fetch products", 500);
   }
 });
 
@@ -106,10 +363,16 @@ exports.listProducts = asyncHandler(async (req, res) => {
 // GET SINGLE PRODUCT
 // ===============================
 exports.getProduct = asyncHandler(async (req, res) => {
-  const product = await productRepository.findById(req.params.id);
-  if (!product) return fail(res, "Not found", 404);
+  const product = await productRepository.findById(req.params.id, "", "category");
+  if (!product || product.isDeleted) {
+    return fail(res, "Product not found", 404);
+  }
+  if (product.status !== "active" && req.user?.role !== "admin") {
+    return fail(res, "Product not found", 404);
+  }
 
-  return ok(res, product);
+  // Ensure consistent response structure
+  return ok(res, serializeProduct(product), "Product retrieved successfully");
 });
 
 // ===============================
@@ -120,51 +383,211 @@ const sanitizeProductData = (payload) => {
   
   const sanitized = { ...payload };
 
-  // Handle common string-to-number conversions for multipart/form-data
-  if (typeof payload.price === 'string') sanitized.price = Number(payload.price) || 0;
-  if (typeof payload.originalPrice === 'string') sanitized.originalPrice = Number(payload.originalPrice) || 0;
-  if (typeof payload.stock === 'string') sanitized.stock = Number(payload.stock) || 0;
-  if (typeof payload.featured === 'string') sanitized.featured = payload.featured === 'true';
-  if (typeof payload.isTrending === 'string') sanitized.isTrending = payload.isTrending === 'true';
+  // Handle common string-to-number conversions
+  if (payload.price !== undefined) sanitized.price = Number(payload.price);
+  if (payload.originalPrice !== undefined) sanitized.originalPrice = Number(payload.originalPrice) || 0;
+  delete sanitized.rating;
+  delete sanitized.ratings;
+  
+  // Booleans
+  if (payload.featured !== undefined) sanitized.featured = toBool(payload.featured);
+  if (payload.isTrending !== undefined || payload.trending !== undefined) sanitized.isTrending = toBool(payload.isTrending ?? payload.trending);
+  if (payload.isBestSeller !== undefined) sanitized.isBestSeller = toBool(payload.isBestSeller);
 
+  if (payload.gender) sanitized.gender = String(payload.gender).toLowerCase();
+  
   if (payload.title || payload.name) {
-    sanitized.name = (payload.name || payload.title).trim();
+    sanitized.name = clean(payload.name || payload.title);
+    delete sanitized.slug;
   }
 
-  // Handle nested objects if they come as JSON strings from multipart
-  if (typeof payload.video === 'string') {
-    try { sanitized.video = JSON.parse(payload.video); } catch(e) {}
+  if (payload.category !== undefined) sanitized.category = clean(payload.category);
+  if (payload.subcategory !== undefined) sanitized.subcategory = clean(payload.subcategory).toLowerCase();
+  if (payload.status !== undefined) sanitized.status = clean(payload.status).toLowerCase() || "draft";
+  if (payload.images !== undefined) sanitized.images = normalizePersistedImages(payload.images);
+  if (payload.colors !== undefined) sanitized.colors = splitList(payload.colors);
+  if (payload.sizes !== undefined) sanitized.sizes = splitList(payload.sizes);
+  if (payload.primaryImage !== undefined) {
+    sanitized.primaryImage = isUsableImage(payload.primaryImage) ? clean(payload.primaryImage) : "";
   }
-  if (typeof payload.variants === 'string') {
-    try { sanitized.variants = JSON.parse(payload.variants); } catch(e) {}
-  }
-  if (typeof payload.badge === 'string') {
-    try { sanitized.badge = JSON.parse(payload.badge); } catch(e) {}
-  }
-  if (typeof payload.offer === 'string') {
-    try { sanitized.offer = JSON.parse(payload.offer); } catch(e) {}
-  }
-  if (typeof payload.controls === 'string') {
-    try { sanitized.controls = JSON.parse(payload.controls); } catch(e) {}
+  if (payload.hoverImage !== undefined) {
+    sanitized.hoverImage = isUsableImage(payload.hoverImage) ? clean(payload.hoverImage) : "";
   }
 
+  // Handle Video
+  if (payload.video !== undefined) {
+    sanitized.video = typeof payload.video === 'object' ? (payload.video.url || "") : String(payload.video);
+  }
+
+  if (payload.offer && typeof payload.offer === "object") {
+    sanitized.offer = {
+      title: clean(payload.offer.title),
+      discount: clean(payload.offer.discount),
+      couponCode: clean(payload.offer.couponCode).toUpperCase(),
+      startDate: payload.offer.startDate || null,
+      expiryDate: payload.offer.expiryDate || payload.offer.endDate || null,
+      isActive: toBool(payload.offer.isActive ?? payload.offer.enabled),
+    };
+  }
+
+  // Handle Variants (Hierarchical)
   if (Array.isArray(sanitized.variants)) {
-    const basePrice = sanitized.price || 0;
-    sanitized.variants = sanitized.variants.map((v) => ({
-      ...v,
-      sku: v.sku || `${(sanitized.name || "PRD").substring(0, 3).toUpperCase()}-${(v.color || 'XX').substring(0, 2).toUpperCase()}-${v.size || 'S'}-${Date.now()}`,
-      color: String(v.color || "Common"),
-      size: String(v.size || "Standard"),
-      price: Number(v.price || basePrice) || 0,
-      stock: Number(v.stock >= 0 ? v.stock : 0),
-      image: String(v.image || "")
-    }));
-    sanitized.stock = sanitized.variants.reduce((sum, v) => sum + (Number(v.stock) || 0), 0);
+    let totalStock = 0;
+    sanitized.variants = sanitized.variants.map((v) => {
+      const sizes = Array.isArray(v.sizes) ? v.sizes.map(s => ({
+        size: String(s.size),
+        stock: Number(s.stock) || 0
+      })) : [];
+      
+      totalStock += sizes.reduce((sum, s) => sum + s.stock, 0);
+
+      return {
+        color: String(v.color || "Common"),
+        colorCode: String(v.colorCode || "#000000"),
+        images: normalizePersistedImages(v.images),
+        sizes: sizes
+      };
+    });
+    sanitized.stock = totalStock;
+    sanitized.colors = [...new Set(sanitized.variants.map((v) => v.color).filter(Boolean))];
+    sanitized.sizes = [...new Set(sanitized.variants.flatMap((v) => v.sizes.map((s) => s.size)).filter(Boolean))];
+  } else if (payload.stock !== undefined) {
+    sanitized.stock = Math.max(0, Number(payload.stock) || 0);
   }
+
+  delete sanitized.title;
+  delete sanitized.trending;
+  delete sanitized.productType;
+  delete sanitized.badge;
+  delete sanitized.controls;
 
   return sanitized;
 };
 
+const validateProductPayload = async (payload, { partial = false } = {}) => {
+  if (!partial || payload.name !== undefined) {
+    if (!payload.name || payload.name.length < 2) return "Product name is required";
+  }
+  if (!partial || payload.price !== undefined) {
+    if (!Number.isFinite(Number(payload.price)) || Number(payload.price) <= 0) return "Valid price is required";
+  }
+  if (!partial || payload.category !== undefined) {
+    if (!isObjectId(payload.category)) return "Valid category is required";
+    const exists = await Category.exists({ _id: payload.category, isActive: true });
+    if (!exists) return "Category not found";
+  }
+  if (payload.originalPrice && payload.price && Number(payload.originalPrice) < Number(payload.price)) {
+    return "Original price cannot be less than price";
+  }
+  return null;
+};
+
+// ===============================
+// ADMIN LIST PRODUCTS
+// ===============================
+exports.adminListProducts = asyncHandler(async (req, res) => {
+  if (req.user.role !== "admin") {
+    return fail(res, "Unauthorized", 403);
+  }
+
+  const { status, page = 1, limit = 50, q, gender, category } = req.query;
+  const pageNum = safeParseInt(page, 1, 1, 100000);
+  const limitNum = safeParseInt(limit, 50, 1, 100);
+
+  // 1. BASE QUERY
+  const query = { isDeleted: { $ne: true } };
+  
+  // 2. STATUS FILTER
+  if (status && status !== "all") query.status = status;
+
+  const genderText =
+    gender && !["all", "All"].includes(gender)
+      ? String(gender).toLowerCase()
+      : "";
+  const categoryText =
+    category && !["all", "All"].includes(category)
+      ? String(category)
+      : "";
+
+  if (genderText) query.gender = genderText;
+
+  if (categoryText) {
+    query.category = categoryText;
+
+    if (genderText) {
+      const selectedCategory = await Category.findById(categoryText)
+        .select("gender")
+        .lean();
+
+      if (
+        selectedCategory?.gender &&
+        String(selectedCategory.gender).toLowerCase() !== genderText
+      ) {
+        query._id = { $exists: false };
+      }
+    }
+  }
+
+  // 3. SEARCH FILTER
+  if (q && String(q).trim()) {
+    const searchRegex = new RegExp(escapeRegex(String(q).trim()), "i");
+    query.$or = [
+      { name: searchRegex },
+      { description: searchRegex },
+      { tags: searchRegex },
+      { subcategory: searchRegex }
+    ];
+  }
+
+  const options = {
+    page: pageNum,
+    limit: limitNum,
+    populate: "category",
+    sort: { createdAt: -1 },
+    lean: true
+  };
+
+  const products = await Product.paginate(query, options);
+  
+  const docs = products.docs.map(serializeProduct);
+
+  return ok(res, {
+    products: docs,
+    items: docs,
+    total: products.totalDocs,
+    pages: products.totalPages,
+    totalPages: products.totalPages,
+    currentPage: products.page
+  }, "Admin products fetched");
+});
+
+// ===============================
+// TOGGLE PRODUCT STATUS
+// ===============================
+exports.toggleProductStatus = asyncHandler(async (req, res) => {
+  if (req.user.role !== "admin") {
+    return fail(res, "Unauthorized", 403);
+  }
+
+  const { id } = req.params;
+  const product = await Product.findById(id);
+
+  if (!product) return fail(res, "Product not found", 404);
+
+  // Toggle draft <-> active
+  product.status = product.status === "active" ? "draft" : "active";
+  await product.save();
+
+  setImmediate(() => {
+    invalidateProductCaches().catch(() => {});
+  });
+
+  return ok(res, product, `Product status updated to ${product.status}`);
+});
+
+// ===============================
+// CREATE PRODUCT (SAFE)
+// ===============================
 // ===============================
 // CREATE PRODUCT (SAFE)
 // ===============================
@@ -173,44 +596,33 @@ exports.createProduct = asyncHandler(async (req, res) => {
     return fail(res, "Unauthorized", 403);
   }
 
-  try {
-    const sanitized = sanitizeProductData(req.body);
-    const { streamUpload } = require("./upload.controller");
-
-    // Handle Image Upload (Optional)
-    if (req.files && req.files.image && req.files.image[0]) {
-      const result = await streamUpload(req.files.image[0].buffer, { folder: "products/images" });
-      sanitized.primaryImage = result.secure_url;
-    }
-
-    // Handle Video Upload (Optional)
-    if (req.files && req.files.video && req.files.video[0]) {
-      const result = await streamUpload(req.files.video[0].buffer, { 
-        folder: "products/videos",
-        resource_type: "video"
-      });
-      sanitized.video = {
-        url: result.secure_url,
-        publicId: result.public_id,
-        duration: result.duration || 0,
-        size: result.bytes || req.files.video[0].size
-      };
-    }
-
-    const product = new Product(sanitized);
-    await product.save();
-
-    safeCall((r) => r.flushdb());
-    setImmediate(() => {
-        notifyAdmins({ title: "New Product", body: product.name }).catch(() => {});
-        sendNewProductEmail(product).catch(() => {});
-    });
-
-    return ok(res, product, "Product Created Successfully", 201);
-  } catch (err) {
-    logger.error("PRODUCT_CREATE_CRITICAL_FAIL", { error: err.message });
-    return fail(res, "Creation failed: " + err.message, 500);
+  const sanitized = sanitizeProductData(req.body);
+  const validationError = await validateProductPayload(sanitized);
+  if (validationError) return fail(res, validationError, 400);
+  if (sanitized.name) {
+    sanitized.slug = await makeUniqueSlug(sanitized.name);
   }
+
+  const product = new Product(sanitized);
+  await product.save();
+
+  // Background Tasks
+  setImmediate(() => {
+    invalidateProductCaches().catch(() => {});
+    notifyAdmins({ title: "New Product", body: product.name }).catch(() => {});
+    sendNewProductEmail(product.toObject()).catch((error) => {
+      logger.error("[NEW_PRODUCT_ADMIN_EMAIL_FAILED]", { error: error.message });
+    });
+    notifyUsersAboutNewProduct(product).catch((error) => {
+      logger.error("[NEW_PRODUCT_USER_EMAIL_FAILED]", { error: error.message });
+    });
+  });
+
+  return res.status(201).json({ 
+    success: true, 
+    data: serializeProduct(product.toObject()), 
+    message: "Product created successfully" 
+  });
 });
 
 // ===============================
@@ -221,56 +633,25 @@ exports.updateProduct = asyncHandler(async (req, res) => {
     return fail(res, "Unauthorized", 403);
   }
 
-  try {
-    const product = await Product.findById(req.params.id);
-    if (!product) return fail(res, "Not found", 404);
+  const { id } = req.params;
+  const sanitized = sanitizeProductData(req.body);
+  const validationError = await validateProductPayload(sanitized, { partial: true });
+  if (validationError) return fail(res, validationError, 400);
 
-    const sanitized = sanitizeProductData(req.body);
-    const { streamUpload } = require("./upload.controller");
-    const cloudinary = require("../config/cloudinary").getCloudinary();
-
-    // Handle Image Update
-    if (req.files && req.files.image && req.files.image[0]) {
-      const result = await streamUpload(req.files.image[0].buffer, { folder: "products/images" });
-      sanitized.primaryImage = result.secure_url;
-      // Note: We don't delete old image here unless we have its publicId, 
-      // but images array usually handles this differently in this system.
-    }
-
-    // Handle Video Update
-    if (req.files && req.files.video && req.files.video[0]) {
-      // 1. Delete old video from Cloudinary
-      if (product.video && product.video.publicId) {
-        await cloudinary.uploader.destroy(product.video.publicId, { resource_type: "video" }).catch(e => {
-          logger.warn("Old video deletion failed during update", { publicId: product.video.publicId });
-        });
-      }
-
-      // 2. Upload new video
-      const result = await streamUpload(req.files.video[0].buffer, { 
-        folder: "products/videos",
-        resource_type: "video"
-      });
-      
-      sanitized.video = {
-        url: result.secure_url,
-        publicId: result.public_id,
-        duration: result.duration || 0,
-        size: result.bytes || req.files.video[0].size
-      };
-    }
-
-    // Apply updates
-    Object.assign(product, sanitized);
-    await product.save();
-
-    safeCall((r) => r.flushdb());
-
-    return ok(res, product, "Updated");
-  } catch (err) {
-    logger.error("PRODUCT_UPDATE_CRITICAL_FAIL", { error: err.message });
-    return fail(res, "Update failed: " + err.message, 500);
+  const product = await Product.findById(id);
+  if (!product) return fail(res, "Product not found", 404);
+  if (sanitized.name) {
+    sanitized.slug = await makeUniqueSlug(sanitized.name, id);
   }
+  Object.assign(product, sanitized);
+  await product.save();
+
+  // Background Tasks
+  setImmediate(() => {
+    invalidateProductCaches().catch(() => {});
+  });
+
+  return ok(res, serializeProduct(product.toObject()), "Product updated successfully");
 });
 
 // ===============================
@@ -284,69 +665,165 @@ exports.deleteVideo = asyncHandler(async (req, res) => {
   const product = await Product.findById(req.params.id);
   if (!product) return fail(res, "Product not found", 404);
 
-  if (product.video && product.video.publicId) {
-    try {
-      const cloudinary = require("../config/cloudinary").getCloudinary();
-      await cloudinary.uploader.destroy(product.video.publicId, { resource_type: "video" });
-    } catch (err) {
-      logger.error("CLOUDINARY_VIDEO_DELETE_FAILED", { error: err.message, publicId: product.video.publicId });
-    }
-  }
-
-  product.video = { url: null, publicId: null };
+  product.video = "";
   await product.save();
 
-  safeCall((r) => r.flushdb());
+  setImmediate(() => {
+    invalidateProductCaches().catch(() => {});
+  });
 
   return ok(res, product, "Video deleted successfully");
 });
 
 // ===============================
-// DELETE PRODUCT
+// DELETE PRODUCT (SOFT DELETE)
 // ===============================
 exports.deleteProduct = asyncHandler(async (req, res) => {
   if (req.user.role !== "admin") {
     return fail(res, "Unauthorized", 403);
   }
 
-  const product = await productRepository.hardDeleteById(req.params.id);
+  const product = await Product.findByIdAndUpdate(req.params.id, {
+    isDeleted: true,
+    status: "archived"
+  }, { new: true });
+
   if (!product) return fail(res, "Not found", 404);
 
-  safeCall((r) => r.flushdb());
+  setImmediate(() => {
+    invalidateProductCaches().catch(() => {});
+  });
 
-  return ok(res, { deleted: true }, "Product physically removed from catalog");
+  return ok(res, { deleted: true }, "Product securely archived and removed from catalog");
+});
+
+// ===============================
+// SPECIALIZED SECTIONS (HOME)
+// ===============================
+exports.getNewArrivals = asyncHandler(async (req, res) => {
+  const products = await Product.find({ 
+    isDeleted: { $ne: true }, 
+    status: "active"
+  })
+    .sort({ createdAt: -1 })
+    .limit(8)
+    .populate("category")
+    .lean();
+    
+  res.json({ success: true, data: { products: products.map(serializeProduct) }, products: products.map(serializeProduct) });
+});
+
+exports.getHotSale = asyncHandler(async (req, res) => {
+  const products = await Product.find({
+    isDeleted: { $ne: true },
+    status: "active"
+  })
+    .sort({ price: 1, createdAt: -1 })
+    .limit(40)
+    .populate("category")
+    .lean();
+
+  const hotProducts = products
+    .map(serializeProduct)
+    .map((product) => {
+      const price = Number(product.price) || 0;
+      const originalPrice = Number(product.originalPrice) || 0;
+      const discount =
+        originalPrice > price && originalPrice > 0
+          ? Math.round(((originalPrice - price) / originalPrice) * 100)
+          : 0;
+
+      return { ...product, discount };
+    })
+    .filter((product) => product.price <= 50 || product.discount >= 50)
+    .sort((a, b) => (b.discount - a.discount) || (a.price - b.price))
+    .slice(0, 8);
+
+  res.json({ success: true, data: { products: hotProducts }, products: hotProducts });
+});
+
+exports.getTrending = asyncHandler(async (req, res) => {
+  const products = await Product.find({ 
+    isDeleted: { $ne: true }, 
+    status: "active"
+  })
+    .sort({ salesCount: -1, "ratings.average": -1, "ratings.count": -1, createdAt: -1 })
+    .limit(8)
+    .populate("category")
+    .lean();
+    
+  res.json({ success: true, data: { products: products.map(serializeProduct) }, products: products.map(serializeProduct) });
+});
+
+exports.getBestSellers = asyncHandler(async (req, res) => {
+  const products = await Product.find({ 
+    isDeleted: { $ne: true }, 
+    status: "active"
+  })
+    .sort({ salesCount: -1 })
+    .limit(8)
+    .populate("category")
+    .lean();
+    
+  res.json({ success: true, data: { products: products.map(serializeProduct) }, products: products.map(serializeProduct) });
 });
 
 // ===============================
 // GET FILTERS (OPTIMIZED)
 // ===============================
 exports.getFilters = asyncHandler(async (req, res) => {
-  try {
-    const filters = await Product.aggregate([
-      { $match: { isDeleted: { $ne: true } } },
-      {
-        $group: {
-          _id: null,
-          categories: { $addToSet: "$category" },
-          subcategories: { $addToSet: "$subcategory" },
-          types: { $addToSet: "$type" },
-          maxPrice: { $max: "$price" },
-          minPrice: { $min: "$price" },
-        },
-      },
+  const { gender, categoryId } = req.query;
+  const cacheKey = `filters:${gender || 'all'}:${categoryId || 'none'}`;
+  
+  return cache.getOrSet(cacheKey, async () => {
+    const genderFilter = gender && gender !== "all" ? gender : "men";
+    const filter = { isDeleted: { $ne: true }, status: "active", gender: genderFilter };
+
+    const [categories, colors, priceStats] = await Promise.all([
+      Category.find({ gender: genderFilter, isActive: true }).lean(),
+      Product.distinct("colors", { gender: genderFilter, isDeleted: { $ne: true }, status: "active" }),
+      Product.aggregate([
+        { $match: { gender: genderFilter, isDeleted: { $ne: true }, status: "active" } },
+        { $group: { _id: null, maxPrice: { $max: "$price" } } }
+      ])
     ]);
 
-    const data = filters[0] || {
-      categories: [],
-      subcategories: [],
-      types: [],
-      maxPrice: 10000,
-      minPrice: 0,
-    };
+    // Handle sizes
+    let sizes = [];
+    if (categoryId && !["all", "none", "null", "undefined"].includes(categoryId)) {
+      const catIds = String(categoryId).split(",").filter(id => /^[0-9a-fA-F]{24}$/.test(id));
+      if (catIds.length > 0) {
+        const selectedCats = await Category.find({ _id: { $in: catIds } }).lean();
+        
+        const unionSizes = new Set();
+        selectedCats.forEach(cat => {
+          (cat.sizes || []).forEach(s => unionSizes.add(s));
+        });
+        sizes = Array.from(unionSizes);
+      }
+    } else {
+      // Union of all sizes in this gender
+      sizes = await Product.distinct("sizes", { gender: genderFilter, isDeleted: { $ne: true }, status: "active" });
+    }
 
-    return ok(res, data, "Filters fetched");
-  } catch (err) {
+    const stats = priceStats[0] || { maxPrice: 10000 };
+
+    return {
+      categories: categories.map(c => ({
+        _id: c._id,
+        name: c.name,
+        gender: c.gender,
+        type: c.type,
+        sizes: c.sizes
+      })),
+      colors: colors.filter(Boolean),
+      sizes: sizes.filter(Boolean),
+      maxPrice: stats.maxPrice || 10000,
+    };
+  }, 300).then((data) => {
+    return ok(res, data, "Dynamic Filters Fetched");
+  }).catch(err => {
     logger.error("[GET_FILTERS_ERROR]", err);
     return fail(res, "Failed to load filters", 500);
-  }
+  });
 });

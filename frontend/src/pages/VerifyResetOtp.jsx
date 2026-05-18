@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import toast from "react-hot-toast";
@@ -11,41 +11,63 @@ import {
 export default function VerifyResetOtp() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const mountedRef = useRef(true);
 
   const [email, setEmail] = useState(
-    params.get("email") || ""
+    (params.get("email") || "").trim().toLowerCase()
   );
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
-  const [resendLoading, setResendLoading] =
-    useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
   const [error, setError] = useState("");
   const [timer, setTimer] = useState(30);
 
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const clearError = () => {
+    if (error) setError("");
+  };
+
   /* ---------------- TIMER ---------------- */
   useEffect(() => {
-    if (timer <= 0) return;
+    if (timer <= 0) return undefined;
 
-    const t = setInterval(() => {
-      setTimer((prev) => prev - 1);
+    const timeout = setTimeout(() => {
+      setTimer((prev) => Math.max(0, prev - 1));
     }, 1000);
 
-    return () => clearInterval(t);
+    return () => clearTimeout(timeout);
   }, [timer]);
 
   /* ---------------- VALIDATION ---------------- */
   const validate = () => {
-    if (!email.trim()) return "Please enter your email.";
-    if (!/\S+@\S+\.\S+/.test(email))
+    const safeEmail = email.trim().toLowerCase();
+
+    if (!safeEmail) return "Please enter your email.";
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeEmail)) {
       return "Enter a valid email address.";
-    if (otp.length !== 6)
+    }
+
+    if (!/^\d{6}$/.test(otp)) {
       return "Enter a valid 6-digit code.";
+    }
+
     return "";
   };
 
   /* ---------------- SUBMIT ---------------- */
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (loading) return;
+
     setError("");
 
     const validationError = validate();
@@ -54,18 +76,27 @@ export default function VerifyResetOtp() {
       return;
     }
 
+    const safeEmail = email.trim().toLowerCase();
+
     setLoading(true);
 
     try {
       const res = await api.post("/auth/verify-otp", {
-        email: email.trim(),
+        email: safeEmail,
         otp,
         purpose: "reset",
       });
 
+      const data = res?.data ?? res;
+      const payload = data?.data ?? data;
+
       const resetToken =
-        res?.resetToken ||
-        res?.data?.resetToken;
+        payload?.resetToken ||
+        payload?.token ||
+        payload?.reset_token ||
+        data?.resetToken ||
+        data?.token ||
+        otp;
 
       if (!resetToken) {
         throw new Error("Invalid response");
@@ -75,40 +106,59 @@ export default function VerifyResetOtp() {
 
       navigate(
         `/reset-password?email=${encodeURIComponent(
-          email
-        )}&token=${encodeURIComponent(resetToken)}`
+          safeEmail
+        )}&token=${encodeURIComponent(resetToken)}`,
+        { replace: true }
       );
     } catch (err) {
       const msg =
         err?.response?.data?.message ||
+        err?.message ||
         "Invalid or expired code.";
-      setError(msg);
+
+      if (mountedRef.current) {
+        setError(msg);
+      }
+
       toast.error(msg);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   /* ---------------- RESEND ---------------- */
   const resendOtp = async () => {
-    if (!email.trim()) {
+    const safeEmail = email.trim().toLowerCase();
+
+    if (!safeEmail) {
       return toast.error("Enter your email first");
     }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeEmail)) {
+      return toast.error("Enter a valid email address");
+    }
+
+    if (resendLoading || timer > 0) return;
 
     try {
       setResendLoading(true);
 
       await api.post("/auth/send-otp", {
-        email: email.trim(),
+        email: safeEmail,
         purpose: "reset",
       });
 
       toast.success("New code sent");
       setTimer(30);
-    } catch {
-      toast.error("Failed to resend code");
+      setOtp("");
+    } catch (err) {
+      toast.error(err?.response?.data?.message || "Failed to resend code");
     } finally {
-      setResendLoading(false);
+      if (mountedRef.current) {
+        setResendLoading(false);
+      }
     }
   };
 
@@ -143,17 +193,21 @@ export default function VerifyResetOtp() {
             <label className="text-sm text-gray-600">
               Email Address
             </label>
+
             <div className="relative mt-1">
               <Mail
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
                 size={18}
               />
+
               <input
                 type="email"
                 value={email}
-                onChange={(e) =>
-                  setEmail(e.target.value)
-                }
+                onChange={(e) => {
+                  setEmail(e.target.value.toLowerCase());
+                  clearError();
+                }}
+                autoComplete="email"
                 className="w-full h-12 pl-10 pr-3 border rounded-lg focus:ring-2 focus:ring-black outline-none"
               />
             </div>
@@ -164,17 +218,18 @@ export default function VerifyResetOtp() {
             <label className="text-sm text-gray-600">
               6-digit Code
             </label>
+
             <input
               type="text"
               inputMode="numeric"
               maxLength={6}
               value={otp}
-              onChange={(e) =>
-                setOtp(
-                  e.target.value.replace(/\D/g, "")
-                )
-              }
+              onChange={(e) => {
+                setOtp(e.target.value.replace(/\D/g, "").slice(0, 6));
+                clearError();
+              }}
               placeholder="Enter code"
+              autoComplete="one-time-code"
               className="w-full h-12 text-center text-lg tracking-widest border rounded-lg focus:ring-2 focus:ring-black outline-none"
             />
           </div>
@@ -185,9 +240,7 @@ export default function VerifyResetOtp() {
             disabled={loading}
             className="w-full h-12 bg-black text-white rounded-lg flex items-center justify-center gap-2 disabled:opacity-60"
           >
-            {loading
-              ? "Verifying..."
-              : "Verify Code"}
+            {loading ? "Verifying..." : "Verify Code"}
             {!loading && <ArrowRight size={16} />}
           </button>
         </form>
@@ -198,12 +251,16 @@ export default function VerifyResetOtp() {
             <p>Resend code in {timer}s</p>
           ) : (
             <button
+              type="button"
               onClick={resendOtp}
               disabled={resendLoading}
-              className="text-black font-medium flex items-center justify-center gap-2 mx-auto"
+              className="text-black font-medium flex items-center justify-center gap-2 mx-auto disabled:opacity-60"
             >
-              <RefreshCw size={14} />
-              Resend Code
+              <RefreshCw
+                size={14}
+                className={resendLoading ? "animate-spin" : ""}
+              />
+              {resendLoading ? "Sending..." : "Resend Code"}
             </button>
           )}
         </div>

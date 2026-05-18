@@ -1,8 +1,21 @@
 const { Queue } = require("bullmq");
-const { rawClient: redis, isRedisReady } = require("../config/redis");
 const { logger } = require("../utils/logger");
 const AppError = require("../utils/AppError");
 const env = require("../config/env");
+
+const getRedisState = () => {
+  if (!env.REDIS_ENABLED || !env.ENABLE_QUEUE) {
+    return { redis: null, isRedisReady: () => false };
+  }
+  const redisConfig = require("../config/redis");
+  if (redisConfig.isMemory?.()) {
+    return { redis: null, isRedisReady: () => false };
+  }
+  return {
+    redis: redisConfig.rawClient,
+    isRedisReady: redisConfig.isRealRedisReady || redisConfig.isRedisReady,
+  };
+};
 
 /**
  * PRODUCTION-GRADE SMART TASK QUEUE
@@ -17,7 +30,7 @@ class TaskQueue {
     this.name = name;
     this.isCritical = critical;
     this.queue = null;
-    this.isDisabled = !env.REDIS_ENABLED;
+    this.isDisabled = !env.REDIS_ENABLED || !env.ENABLE_QUEUE;
   }
 
   /**
@@ -25,6 +38,7 @@ class TaskQueue {
    */
   initialize() {
     if (this.queue || this.isDisabled) return;
+    const { redis, isRedisReady } = getRedisState();
     
     // Safety check for raw redis client
     if (!redis || redis.constructor.name === 'Proxy') {
@@ -37,7 +51,7 @@ class TaskQueue {
     try {
         const Redis = require("ioredis");
         this.queue = new Queue(this.name, {
-            connection: new Redis(process.env.REDIS_URL, {
+            connection: new Redis(process.env.REDIS_URL || "redis://127.0.0.1:6379", {
                 maxRetriesPerRequest: null,
             }),
             defaultJobOptions: {
@@ -59,7 +73,8 @@ class TaskQueue {
     }
   }
 
-  async add(jobName, data) {
+  async add(jobName, data, options = {}) {
+    const { isRedisReady } = getRedisState();
     if (this.isDisabled || !isRedisReady()) {
       if (this.isCritical) {
         logger.error(`[QUEUES_CRITICAL_FAILURE] Denied task "${jobName}" in "${this.name}" (Redis Offline).`);
@@ -74,7 +89,7 @@ class TaskQueue {
     if (!this.queue) return null;
 
     try {
-      return await this.queue.add(jobName, data);
+      return await this.queue.add(jobName, data, options);
     } catch (error) {
       logger.error(`[BULLMQ_RUNTIME_EXCEPTION] Task submission failed for "${this.name}": ${error.message}`);
       if (this.isCritical) throw error;
@@ -87,9 +102,10 @@ class TaskQueue {
 const emailQueue = new TaskQueue("email-queue", false);
 const notificationQueue = new TaskQueue("notification-queue", false);
 const heavyTaskQueue = new TaskQueue("heavy-task-queue", true);
+const productEventsQueue = new TaskQueue("product-events", false);
 
 const initializeAllQueues = async () => {
-    if (!env.REDIS_ENABLED) {
+    if (!env.REDIS_ENABLED || !env.ENABLE_QUEUE) {
         logger.info("[QUEUES_DISABLED] Architect kill-switch active. Skipping message broker synchronization.");
         return;
     }
@@ -97,6 +113,7 @@ const initializeAllQueues = async () => {
     emailQueue.initialize();
     notificationQueue.initialize();
     heavyTaskQueue.initialize();
+    productEventsQueue.initialize();
 };
 
 // --- 1-HOUR CLEANUP LOOP (Compliance: No <60s intervals) ---
@@ -115,4 +132,11 @@ setInterval(async () => {
     }
 }, 3600000).unref();
 
-module.exports = { emailQueue, notificationQueue, heavyTaskQueue, TaskQueue, initializeAllQueues };
+module.exports = {
+  emailQueue,
+  notificationQueue,
+  heavyTaskQueue,
+  productEventsQueue,
+  TaskQueue,
+  initializeAllQueues,
+};

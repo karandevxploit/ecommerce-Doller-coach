@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import toast from "react-hot-toast";
@@ -14,33 +14,66 @@ import {
 export default function ResetPassword() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const mountedRef = useRef(true);
 
-  const [email] = useState(params.get("email") || "");
-  const [token, setToken] = useState(params.get("token") || "");
+  const initialEmail =
+    params.get("email") || params.get("user") || params.get("e") || "";
+  const initialToken =
+    params.get("token") || params.get("otp") || params.get("code") || "";
+
+  const [email] = useState(initialEmail.trim().toLowerCase());
+  const [token, setToken] = useState(initialToken.trim());
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] =
-    useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   const [showPass, setShowPass] = useState(false);
+  const [showConfirmPass, setShowConfirmPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const clearError = () => {
+    if (error) setError("");
+  };
+
   /* ---------------- VALIDATION ---------------- */
   const validate = () => {
-    if (!email) return "Missing email information.";
-    if (!token.trim()) return "Please enter the verification code.";
-    if (token.length < 4) return "Invalid verification code.";
+    const safeEmail = email.trim().toLowerCase();
+    const safeToken = token.trim();
+
+    if (!safeEmail) return "Missing email information.";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeEmail)) {
+      return "Invalid email information.";
+    }
+
+    if (!safeToken) return "Please enter the verification code.";
+    if (safeToken.length < 4) return "Invalid verification code.";
+
     if (!password) return "Please enter a new password.";
-    if (password.length < 6)
+    if (password.length < 6) {
       return "Password must be at least 6 characters.";
-    if (password !== confirmPassword)
+    }
+
+    if (password !== confirmPassword) {
       return "Passwords do not match.";
+    }
+
     return "";
   };
 
   /* ---------------- SUBMIT ---------------- */
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (loading) return;
+
     setError("");
 
     const validationError = validate();
@@ -49,25 +82,37 @@ export default function ResetPassword() {
       return;
     }
 
+    const safeEmail = email.trim().toLowerCase();
+    const safeToken = token.trim();
+
     setLoading(true);
 
     try {
       await api.post("/auth/reset-password", {
-        email,
-        resetToken: token,
+        email: safeEmail,
+        resetToken: safeToken,
+        token: safeToken,
+        otp: safeToken,
         newPassword: password,
+        password,
       });
 
       toast.success("Password updated successfully");
-      navigate("/login");
+      navigate("/login", { replace: true });
     } catch (err) {
       const msg =
         err?.response?.data?.message ||
         "Failed to reset password. Please try again.";
-      setError(msg);
+
+      if (mountedRef.current) {
+        setError(msg);
+      }
+
       toast.error(msg);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -129,11 +174,13 @@ export default function ResetPassword() {
               <input
                 type="text"
                 value={token}
-                onChange={(e) =>
-                  setToken(e.target.value.trim())
-                }
+                onChange={(e) => {
+                  setToken(e.target.value.trim());
+                  clearError();
+                }}
                 placeholder="Enter code"
                 aria-label="Verification code"
+                autoComplete="one-time-code"
                 className="w-full h-12 pl-10 pr-3 border rounded-lg focus:ring-2 focus:ring-black outline-none"
               />
             </div>
@@ -152,22 +199,21 @@ export default function ResetPassword() {
               <input
                 type={showPass ? "text" : "password"}
                 value={password}
-                onChange={(e) =>
-                  setPassword(e.target.value)
-                }
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  clearError();
+                }}
                 placeholder="Enter new password"
+                autoComplete="new-password"
                 className="w-full h-12 pl-10 pr-10 border rounded-lg focus:ring-2 focus:ring-black outline-none"
               />
               <button
                 type="button"
-                onClick={() => setShowPass((p) => !p)}
+                onClick={() => setShowPass((prev) => !prev)}
+                aria-label={showPass ? "Hide password" : "Show password"}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500"
               >
-                {showPass ? (
-                  <EyeOff size={18} />
-                ) : (
-                  <Eye size={18} />
-                )}
+                {showPass ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
           </div>
@@ -177,15 +223,35 @@ export default function ResetPassword() {
             <label className="text-sm text-gray-600">
               Confirm Password
             </label>
-            <input
-              type="password"
-              value={confirmPassword}
-              onChange={(e) =>
-                setConfirmPassword(e.target.value)
-              }
-              placeholder="Re-enter password"
-              className="w-full h-12 border rounded-lg px-3 focus:ring-2 focus:ring-black outline-none"
-            />
+            <div className="relative mt-1">
+              <Lock
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                size={18}
+              />
+              <input
+                type={showConfirmPass ? "text" : "password"}
+                value={confirmPassword}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  clearError();
+                }}
+                placeholder="Re-enter password"
+                autoComplete="new-password"
+                className="w-full h-12 pl-10 pr-10 border rounded-lg focus:ring-2 focus:ring-black outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPass((prev) => !prev)}
+                aria-label={
+                  showConfirmPass
+                    ? "Hide confirm password"
+                    : "Show confirm password"
+                }
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500"
+              >
+                {showConfirmPass ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
           </div>
 
           {/* Submit */}
@@ -194,9 +260,7 @@ export default function ResetPassword() {
             disabled={loading}
             className="w-full h-12 bg-black text-white rounded-lg flex items-center justify-center gap-2 disabled:opacity-60"
           >
-            {loading
-              ? "Updating password..."
-              : "Update Password"}
+            {loading ? "Updating password..." : "Update Password"}
             {!loading && <ArrowRight size={16} />}
           </button>
         </form>
